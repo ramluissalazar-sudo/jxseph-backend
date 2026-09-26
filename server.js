@@ -1,78 +1,88 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
-const bcrypt = require('bcryptjs');
+const { MongoClient } = require('mongodb');
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use(cors());
+app.use(express.json());
 
-// Conexión directa a tu base de datos de MongoDB Atlas
-const MONGO_URI = "mongodb+srv://jxsephstore_db_user:lNowAa4aHMLCy5f3@jxsephstoredb.mgemkee.mongodb.net/?appName=JxsephStoreDB";
+// URI oficial de tu base de datos en MongoDB Atlas
+const uri = "mongodb+srv://jxsephstore_db_user:1NowAa4AHMLCy5f3@jxsephstoredb.mgemkee.mongodb.net/?retryWrites=true&w=majority";
+const client = new MongoClient(uri);
 
-mongoose.connect(MONGO_URI)
-  .then(() => console.log("Conectado a MongoDB Atlas con éxito"))
-  .catch(err => console.error("Error al conectar a MongoDB:", err));
+let cacheCollection;
 
-const UserSchema = new mongoose.Schema({
-    name: { type: String, required: true, unique: true },
-    email: { type: String, required: false }, // Opcional para los que se registran por usuario/contraseña
-    password: { type: String, required: true },
-    pic: { type: String, default: '' }
-});
-
-const User = mongoose.model('User', UserSchema);
-
-// Registrar Usuario (Usando Nombre de Usuario y Contraseña)
-app.post('/api/register', async (req, res) => {
+async function conectarDB() {
     try {
-        const { name, password } = req.body;
-        
-        // Verificar si el usuario ya existe
-        let existingUser = await User.findOne({ name });
-        if (existingUser) {
-            return res.status(400).json({ success: false, message: 'El nombre de usuario ya está en uso.' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = new User({ 
-            name, 
-            email: '', 
-            password: hashedPassword, 
-            pic: '' 
-        });
-        
-        await newUser.save();
-        res.json({ success: true, message: 'Usuario registrado correctamente', user: { name, email: '', pic: '' } });
-    } catch (error) {
-        console.error("Error en registro:", error);
-        res.status(500).json({ success: false, message: 'Error en el servidor' });
+        await client.connect();
+        const db = client.db("jxseph_store");
+        cacheCollection = db.collection("uids_cache");
+        console.log("Conectado exitosamente a MongoDB Atlas");
+    } catch (e) {
+        console.error("Error al conectar a la base de datos:", e);
     }
-});
+}
+conectarDB();
 
-// Iniciar Sesión (Buscando por Nombre de Usuario)
-app.post('/api/login', async (req, res) => {
+// Tus 5 cuentas configuradas para la rotación automática
+const cuentasApi = [
+    { useruid: "US1sc9xwLJPZUPCFctlSkQeoa5r2", apiKey: "kaiqIA3oUtxFA9kBBaP9UZB8fBbFb1" },
+    { useruid: "N5RkJGYopvdfi2ckptkstByn5Ef2", apiKey: "hxrT1OIMKgwMOkyUzgxKheQbJP4sNp" },
+    { useruid: "p8OmIYODcZwK7hyZeCMaxMQUH11", apiKey: "fWHilgMaQytoBK2ItMoD34C9CfzH1" },
+    { useruid: "elnyJoK2siVkw06ozYVrZI5dij12", apiKey: "CyyrdwCBH49kQ88MDRdWk2nGyvsCS" },
+    { useruid: "qsYZfyr7CJW4oQChPrXyyYueRq2", apiKey: "Ss9QZiIqikUBOCSnBOT0Rxd8rBe9FR" }
+];
+
+let indiceCuentaActual = 0;
+
+app.get('/verificar', async (req, res) => {
+    const uid = req.query.uid;
+
+    if (!uid) {
+        return res.status(400).json({ valid: false });
+    }
+
     try {
-        const { name, password } = req.body;
-        
-        // Buscamos al usuario por su nombre (name)
-        const user = await User.findOne({ name });
-        if (!user) {
-            return res.status(400).json({ success: false, message: 'Usuario o contraseña incorrectos.' });
+        // 1. Buscar primero en MongoDB Atlas (Caché permanente)
+        const cachedUser = await cacheCollection.findOne({ uid: uid });
+        if (cachedUser) {
+            return res.json({ valid: true, AccountName: cachedUser.nombre });
         }
 
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(400).json({ success: false, message: 'Usuario o contraseña incorrectos.' });
+        // 2. Rotación de cuentas si no está guardado
+        let intentos = 0;
+        let nombreJugador = null;
+
+        while (intentos < cuentasApi.length) {
+            const cuenta = cuentasApi[indiceCuentaActual];
+            const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
+
+            const respuesta = await fetch(url);
+            const data = await respuesta.json(); // <--- Aquí estaba el espacio corregido
+
+            if (data.result && data.result.valid && data.result.AccountName) {
+                nombreJugador = data.result.AccountName;
+                break; 
+            } else {
+                indiceCuentaActual = (indiceCuentaActual + 1) % cuentasApi.length;
+            }
+            intentos++;
         }
 
-        res.json({ success: true, message: 'Sesión iniciada', user: { name: user.name, email: user.email, pic: user.pic } });
+        if (nombreJugador) {
+            // Guardar permanentemente en MongoDB Atlas
+            await cacheCollection.insertOne({ uid: uid, nombre: nombreJugador });
+            return res.json({ valid: true, AccountName: nombreJugador });
+        } else {
+            return res.json({ valid: false });
+        }
+
     } catch (error) {
-        console.error("Error en login:", error);
-        res.status(500).json({ success: false, message: 'Error en el servidor' });
+        return res.status(500).json({ valid: false });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Servidor corriendo en el puerto ${PORT}`);
+});
