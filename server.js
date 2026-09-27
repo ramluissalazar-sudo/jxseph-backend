@@ -6,8 +6,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// URI oficial de tu base de datos en MongoDB Atlas
-const uri = "mongodb+srv://jxsephstore_db_user:1NowAa4AHMLCy5f3@jxsephstoredb.mgemkee.mongodb.net/?retryWrites=true&w=majority";
+// URI completa con tu usuario y contraseña nuevos ya integrados
+const uri = "mongodb+srv://jxsephadmin:TUNAX2g1y6BGQbYq@jxsephstoredb.mgemkee.mongodb.net/?retryWrites=true&w=majority&appName=JxsephStoreDB";
 const client = new MongoClient(uri);
 
 let cacheCollection;
@@ -24,7 +24,6 @@ async function conectarDB() {
 }
 conectarDB();
 
-// Tus 5 cuentas configuradas para la rotación automática
 const cuentasApi = [
     { useruid: "US1sc9xwLJPZUPCFctlSkQeoa5r2", apiKey: "kaiqIA3oUtxFA9kBBaP9UZB8fBbFb1" },
     { useruid: "N5RkJGYopvdfi2ckptkstByn5Ef2", apiKey: "hxrT1OIMKgwMOkyUzgxKheQbJP4sNp" },
@@ -43,13 +42,11 @@ app.get('/verificar', async (req, res) => {
     }
 
     try {
-        // 1. Buscar primero en MongoDB Atlas (Caché permanente)
         const cachedUser = await cacheCollection.findOne({ uid: uid });
         if (cachedUser) {
             return res.json({ valid: true, AccountName: cachedUser.nombre });
         }
 
-        // 2. Rotación de cuentas si no está guardado
         let intentos = 0;
         let nombreJugador = null;
 
@@ -58,7 +55,7 @@ app.get('/verificar', async (req, res) => {
             const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
 
             const respuesta = await fetch(url);
-            const data = await respuesta.json(); // <--- Aquí estaba el espacio corregido
+            const data = await respuesta.json();
 
             if (data.result && data.result.valid && data.result.AccountName) {
                 nombreJugador = data.result.AccountName;
@@ -70,7 +67,6 @@ app.get('/verificar', async (req, res) => {
         }
 
         if (nombreJugador) {
-            // Guardar permanentemente en MongoDB Atlas
             await cacheCollection.insertOne({ uid: uid, nombre: nombreJugador });
             return res.json({ valid: true, AccountName: nombreJugador });
         } else {
