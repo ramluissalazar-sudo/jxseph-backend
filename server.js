@@ -6,13 +6,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// URI de conexión a MongoDB Atlas
+// URI de conexión a MongoDB Atlas (limpia de avisos obsoletos)
 const uri = "mongodb+srv://jxsephadmin:TUNAX2g1y6BGQbYq@jxsephstoredb.mgemkee.mongodb.net/jxseph_store?retryWrites=true&w=majority&appName=JxsephStoreDB";
 
-mongoose.connect(uri, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-})
+mongoose.connect(uri)
 .then(() => console.log('✅ Conectado exitosamente a MongoDB Atlas'))
 .catch(err => console.error('❌ Error al conectar a la base de datos:', err));
 
@@ -56,7 +53,6 @@ const blockedIpSchema = new mongoose.Schema({
 });
 const BlockedIp = mongoose.model('BlockedIp', blockedIpSchema);
 
-// Nuevo modelo para registrar las consultas de verificación de UIDs
 const verificationLogSchema = new mongoose.Schema({
     ip: String,
     uid: String,
@@ -198,7 +194,7 @@ app.post('/api/pedidos', async (req, res) => {
     }
 });
 
-// E. Consultar Pedidos (Historial o Notificaciones)
+// E. Consultar Pedidos
 app.get('/api/pedidos', async (req, res) => {
     try {
         const { identifier, orderId } = req.query;
@@ -223,10 +219,10 @@ app.get('/api/admin/pedidos', async (req, res) => {
     }
 });
 
-// G. PANEL DE ADMIN: Confirmar Recarga o Cancelar (Pago falso)
+// G. PANEL DE ADMIN: Confirmar Recarga o Cancelar
 app.put('/api/admin/pedidos/:id', async (req, res) => {
     try {
-        const { status } = req.body; // "Completado" o "Cancelado"
+        const { status } = req.body; 
         if (!['Completado', 'Cancelado'].includes(status)) {
             return res.status(400).json({ error: 'Estado no válido.' });
         }
@@ -243,7 +239,7 @@ app.put('/api/admin/pedidos/:id', async (req, res) => {
     }
 });
 
-// H. PANEL DE ADMIN: Ver historial de UIDs verificados por los usuarios
+// H. PANEL DE ADMIN: Ver historial de UIDs verificados
 app.get('/api/admin/verificaciones', async (req, res) => {
     try {
         const logs = await VerificationLog.find().sort({ timestamp: -1 }).limit(50);
@@ -253,7 +249,7 @@ app.get('/api/admin/verificaciones', async (req, res) => {
     }
 });
 
-// I. SEGURIDAD: Bloquear IP (F12 o fraudes)
+// I. SEGURIDAD: Bloquear IP
 app.post('/api/admin/bloquear-ip', async (req, res) => {
     try {
         const { ip, reason } = req.body;
