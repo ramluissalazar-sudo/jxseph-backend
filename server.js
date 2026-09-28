@@ -14,64 +14,53 @@ const cuentasApi = [
     { useruid: "qsYZfyr7CJW4oQChPrXyyYueRq2", apiKey: "Ss9QZiIqikUBOCSnBOT0Rxd8rBe9FR" }
 ];
 
-// --- RUTA EXCLUSIVA DE PRUEBA DE VERIFICACIÓN Y ROTACIÓN ---
 app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
     if (!uid) {
         return res.status(400).json({ valid: false, error: "Falta el parámetro uid" });
     }
 
-    console.log(`\n=== INICIANDO PRUEBA DE VERIFICACIÓN PARA UID: ${uid} ===`);
-    let resultadosDetallados = [];
+    console.log(`\n=== INICIANDO VERIFICACIÓN PARA UID: ${uid} ===`);
 
     for (let i = 0; i < cuentasApi.length; i++) {
         const cuenta = cuentasApi[i];
         const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
 
-        console.log(`🔍 Probando cuenta índice [${i}] (useruid: ${cuenta.useruid})`);
+        console.log(`🔍 Probando cuenta índice [${i}]...`);
 
         try {
             const respuesta = await fetch(url);
             const textoRespuesta = await respuesta.text();
 
-            console.log(`📥 Respuesta cruda cuenta [${i}]:`, textoRespuesta.substring(0, 150));
-
             if (textoRespuesta.trim().startsWith('<')) {
-                console.warn(`⚠️ La cuenta [${i}] devolvió HTML (posible bloqueo o error de formato).`);
-                resultadosDetallados.push({ indice: i, estado: "Error HTML recibido" });
+                console.warn(`⚠️ Cuenta [${i}] devolvió HTML. Saltando...`);
                 continue;
             }
 
             const data = JSON.parse(textoRespuesta);
 
+            // Verificamos si la API devolvió éxito
             if (data.result && data.result.valid && data.result.AccountName) {
-                console.log(`✅ ¡ÉXITO! Encontrado con la cuenta índice [${i}] -> Jugador: ${data.result.AccountName}`);
+                console.log(`✅ ¡ÉXITO! Encontrado con la cuenta [${i}] -> Jugador: ${data.result.AccountName}`);
                 return res.json({
                     valid: true,
                     AccountName: data.result.AccountName,
-                    cuentaExitosa: i,
-                    detallesPrueba: resultadosDetallados
+                    cuentaExitosa: i
                 });
             } else {
-                console.warn(`⚠️ La cuenta [${i}] respondió pero dio inválido o sin saldo:`, data);
-                resultadosDetallados.push({ indice: i, estado: "Inválido / Sin saldo", respuesta: data });
+                console.warn(`⚠️ Cuenta [${i}] sin saldo o respuesta inválida:`, data.status || data.error_code || 'Desconocido');
             }
 
         } catch (err) {
-            console.error(`❌ Excepción en cuenta [${i}]:`, err.message);
-            resultadosDetallados.push({ indice: i, estado: "Excepción de red", error: err.message });
+            console.error(`❌ Error en cuenta [${i}]:`, err.message);
         }
     }
 
-    console.log(`❌ Todas las cuentas fallaron para el UID: ${uid}`);
-    return res.status(404).json({
-        valid: false,
-        error: "Ninguna cuenta pudo verificar el UID",
-        detallesPrueba: resultadosDetallados
-    });
+    console.log(`❌ Ninguna cuenta pudo verificar el UID: ${uid}`);
+    return res.status(200).json({ valid: false, error: "Todas las cuentas fallaron o no tienen saldo" });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor de diagnóstico corriendo en el puerto ${PORT}`);
+    console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
 });
