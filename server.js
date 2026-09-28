@@ -5,19 +5,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Arreglo ordenado: [0] Sin saldo (falla a propósito), [1] La que sí funciona
+// --- CONFIGURACIÓN DE CUENTAS: LA BUENA AL FINAL (ÍNDICE 4) ---
 const cuentasApi = [
-    { useruid: "US1sc9xwLJPZUPCFctlSkQeoa5r2", apiKey: "kaiqIA3oUtxFA9kBBaP9UZB8fBbFb1" }, // Índice 0: Sin saldo
-    { useruid: "N5RkJGYopvdfi2ckptkstByn5Ef2", apiKey: "hxrT1OIMKgWMOkyUzgxKheQbJP4sNp" }  // Índice 1: Con saldo
+    { useruid: "US1sc9xwLJPZUPCFctlSkQeoa5r2", apiKey: "kaiqIA3oUtxFA9kBBaP9UZB8fBbFb1" }, // [0] Sin saldo (falla a propósito)
+    { useruid: "qsYZfyr7CJW4oQChPrXyyYueRq2", apiKey: "Ss9QZiIqikUBOCSnBOT0Rxd8rBe9FR" }, // [1] 
+    { useruid: "elnyJoK2siVkw06ozYVrZI5dij12", apiKey: "CyyrdwCBH49kQ88MDRdWk2nGyvsCS" }, // [2] 
+    { useruid: "p8OmIYODcZwK7hyZeCMaxMQUH11", apiKey: "fWHilgMaQytoBK2ItMoD34C9CfzH1" }, // [3] 
+    { useruid: "N5RkJGYopvdfi2ckptkstByn5Ef2", apiKey: "hxrT1OIMKgWMOkyUzgxKheQbJP4sNp" }  // [4] La buena (al final)
 ];
 
+// --- RUTA DE PRUEBA DE ROTACIÓN ---
 app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
     if (!uid) {
         return res.status(400).json({ valid: false, error: "Falta el UID" });
     }
 
-    console.log(`\n--- PROBANDO ROTACIÓN PARA UID: ${uid} ---`);
+    console.log(`\n--- PROBANDO ROTACIÓN (CUENTA BUENA EN [4]) PARA UID: ${uid} ---`);
     let logRotacion = [];
 
     for (let i = 0; i < cuentasApi.length; i++) {
@@ -38,14 +42,12 @@ app.get('/verificar', async (req, res) => {
 
             const data = JSON.parse(textoRespuesta);
 
-            // Si la API responde con error de cuota, lo detectamos explícitamente y rotamos
             if (data.error_code === "QUOTA_LIMIT_REACHED" || data.status === "quota_exceeded") {
                 console.warn(`❌ [Intento ${i}] Cuenta [${i}] sin saldo (Quota Exceeded). Rotando a la siguiente...`);
                 logRotacion.push({ indice: i, resultado: "Sin saldo / Quota alcanzada" });
-                continue; // Obliga al ciclo a pasar a la siguiente cuenta
+                continue;
             }
 
-            // Si trae los datos correctos del jugador
             if (data.result && data.result.valid && data.result.AccountName) {
                 console.log(`✅ [Intento ${i}] ¡ÉXITO! Encontrado con la cuenta [${i}] -> Jugador: ${data.result.AccountName}`);
                 return res.json({
@@ -55,25 +57,25 @@ app.get('/verificar', async (req, res) => {
                     historialRotacion: logRotacion
                 });
             } else {
-                console.warn(`⚠️ [Intento ${i}] Respuesta no válida de la cuenta [${i}]:`, data);
-                logRotacion.push({ indice: i, resultado: "Respuesta inválida", data });
+                console.warn(`⚠️ [Intento ${i}] Respuesta inválida en cuenta [${i}]`);
+                logRotacion.push({ indice: i, resultado: "Respuesta inválida" });
             }
 
         } catch (err) {
-            console.error(`❌ [Intento ${i}] Error de red en cuenta [${i}]:`, err.message);
+            console.error(`❌ [Intento ${i}] Excepción de red en cuenta [${i}]:`, err.message);
             logRotacion.push({ indice: i, resultado: "Excepción de red", error: err.message });
         }
     }
 
-    console.log(`❌ [Fallo Total] Ninguna cuenta pudo verificar el UID.`);
+    console.log(`❌ [Fallo Total] Ninguna cuenta pudo verificar el UID: ${uid}`);
     return res.status(200).json({
         valid: false,
-        error: "La rotación falló en todas las cuentas",
+        error: "Todas las cuentas fallaron",
         historialRotacion: logRotacion
     });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor de prueba de rotación en el puerto ${PORT}`);
+    console.log(`🚀 Servidor de prueba de rotación corriendo en el puerto ${PORT}`);
 });
