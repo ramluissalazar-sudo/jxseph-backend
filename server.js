@@ -261,6 +261,16 @@ app.put('/api/admin/pedidos/:id', async (req, res) => {
     }
 });
 
+// G.1. PANEL DE ADMIN: Eliminar un pedido individual [NUEVO AÑADIDO]
+app.delete('/api/admin/pedidos/:id', async (req, res) => {
+    try {
+        await Order.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Pedido eliminado correctamente.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al eliminar el pedido.' });
+    }
+});
+
 // H. PANEL DE ADMIN: Ver historial de UIDs verificados
 app.get('/api/admin/verificaciones', async (req, res) => {
     try {
