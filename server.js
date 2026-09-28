@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// URI de conexión a MongoDB Atlas (limpia de avisos obsoletos)
+// URI de conexión a MongoDB Atlas
 const uri = "mongodb+srv://jxsephadmin:TUNAX2g1y6BGQbYq@jxsephstoredb.mgemkee.mongodb.net/jxseph_store?retryWrites=true&w=majority&appName=JxsephStoreDB";
 
 mongoose.connect(uri)
@@ -34,13 +34,13 @@ const User = mongoose.model('User', userSchema);
 
 const orderSchema = new mongoose.Schema({
     orderId: { type: String, unique: true },
-    identifier: String, // Correo del usuario o código de seguimiento
+    identifier: String, 
     uidFreeFire: String,
     playerName: String,
     packageType: String,
     phone: String,
     receiptImage: String,
-    status: { type: String, default: 'Pendiente' }, // Pendiente, Completado, Cancelado
+    status: { type: String, default: 'Pendiente' },
     ipAddress: String,
     createdAt: { type: Date, default: Date.now }
 });
@@ -111,25 +111,30 @@ app.get('/verificar', async (req, res) => {
 
         while (intentos < cuentasApi.length) {
             const cuenta = cuentasApi[indiceCuentaActual];
-            // URL actualizada al Server 1 oficial de HL Gaming
-            const url = `https://apis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
+            const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
 
             console.log(`🔍 Probando con la cuenta índice [${indiceCuentaActual}] para el UID: ${uid}`);
 
-            const respuesta = await fetch(url);
-            const data = await respuesta.json();
+            try {
+                const respuesta = await fetch(url);
+                const textoRespuesta = await respuesta.text();
 
-            console.log(`📥 Respuesta de API externa:`, data);
+                if (textoRespuesta.trim().startsWith('<') || !respuesta.ok) {
+                    console.warn(`⚠️ La cuenta [${indiceCuentaActual}] devolvió HTML o error HTTP. Rotando...`);
+                } else {
+                    const data = JSON.parse(textoRespuesta);
+                    console.log(`📥 Respuesta de API externa:`, data);
 
-            // Si encuentra al jugador con éxito, guardamos el nombre y salimos del ciclo
-            if (data.result && data.result.valid && data.result.AccountName) {
-                nombreJugador = data.result.AccountName;
-                console.log(`✅ ¡Éxito! Jugador encontrado: ${nombreJugador} usando la cuenta [${indiceCuentaActual}]`);
-                break;
-            } 
+                    if (data.result && data.result.valid && data.result.AccountName) {
+                        nombreJugador = data.result.AccountName;
+                        console.log(`✅ ¡Éxito! Jugador encontrado: ${nombreJugador} usando la cuenta [${indiceCuentaActual}]`);
+                        break;
+                    }
+                }
+            } catch (err) {
+                console.warn(`⚠️ Error al procesar la respuesta de la cuenta [${indiceCuentaActual}]`);
+            }
 
-            // Si la API falla o da falso, rotamos inmediatamente a la siguiente cuenta
-            console.warn(`⚠️ La cuenta [${indiceCuentaActual}] falló o dio false. Rotando a la siguiente...`);
             indiceCuentaActual = (indiceCuentaActual + 1) % cuentasApi.length;
             intentos++;
         }
@@ -144,7 +149,7 @@ app.get('/verificar', async (req, res) => {
         }
 
     } catch (error) {
-        console.error("❌ Error en el servidor /verificar:", error);
+        console.error("❌ Error crítico en el servidor /verificar:", error);
         await VerificationLog.create({ ip: req.clientIp, uid, success: false, playerName: 'Error de servidor' });
         return res.status(500).json({ valid: false });
     }
