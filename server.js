@@ -113,17 +113,23 @@ app.get('/verificar', async (req, res) => {
             const cuenta = cuentasApi[indiceCuentaActual];
             const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
 
+            console.log(`🔍 Probando con la cuenta índice [${indiceCuentaActual}] para el UID: ${uid}`);
+
             const respuesta = await fetch(url);
             const data = await respuesta.json();
+
+            console.log(`📥 Respuesta de API externa:`, data);
 
             // Si encuentra al jugador con éxito, guardamos el nombre y salimos del ciclo
             if (data.result && data.result.valid && data.result.AccountName) {
                 nombreJugador = data.result.AccountName;
+                console.log(`✅ ¡Éxito! Jugador encontrado: ${nombreJugador} usando la cuenta [${indiceCuentaActual}]`);
                 break;
             } 
 
             // Si la API responde con valid:false (por falta de peticiones o UID no existente),
             // rotamos inmediatamente a la siguiente cuenta para probar suerte
+            console.warn(`⚠️ La cuenta [${indiceCuentaActual}] falló o dio false. Rotando a la siguiente...`);
             indiceCuentaActual = (indiceCuentaActual + 1) % cuentasApi.length;
             intentos++;
         }
@@ -138,6 +144,7 @@ app.get('/verificar', async (req, res) => {
         }
 
     } catch (error) {
+        console.error("❌ Error en el servidor /verificar:", error);
         await VerificationLog.create({ ip: req.clientIp, uid, success: false, playerName: 'Error de servidor' });
         return res.status(500).json({ valid: false });
     }
