@@ -111,7 +111,8 @@ app.get('/verificar', async (req, res) => {
 
         while (intentos < cuentasApi.length) {
             const cuenta = cuentasApi[indiceCuentaActual];
-            const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
+            // URL actualizada al Server 1 oficial de HL Gaming
+            const url = `https://apis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
 
             console.log(`🔍 Probando con la cuenta índice [${indiceCuentaActual}] para el UID: ${uid}`);
 
@@ -127,8 +128,7 @@ app.get('/verificar', async (req, res) => {
                 break;
             } 
 
-            // Si la API responde con valid:false (por falta de peticiones o UID no existente),
-            // rotamos inmediatamente a la siguiente cuenta para probar suerte
+            // Si la API falla o da falso, rotamos inmediatamente a la siguiente cuenta
             console.warn(`⚠️ La cuenta [${indiceCuentaActual}] falló o dio false. Rotando a la siguiente...`);
             indiceCuentaActual = (indiceCuentaActual + 1) % cuentasApi.length;
             intentos++;
