@@ -71,7 +71,6 @@ const cuentasApi = [
     { useruid: "elnyJoK2siVkw06ozYVrZI5dij12", apiKey: "CyyrdwCBH49kQ88MDRdWk2nGyvsCS" },
     { useruid: "qsYZfyr7CJW4oQChPrXyyYueRq2", apiKey: "Ss9QZiIqikUBOCSnBOT0Rxd8rBe9FR" }
 ];
-let indiceCuentaActual = 0;
 
 
 // --- 3. MIDDLEWARE DE SEGURIDAD (BLOQUEO DE IPS) ---
@@ -92,7 +91,7 @@ app.use(async (req, res, next) => {
 
 // --- 4. RUTAS DE LA API ---
 
-// A. Verificar UID con caché, rotación de llaves y registro en logs
+// A. Verificar UID con caché, rotación local estricta por cada petición y registro en logs
 app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
     if (!uid) {
@@ -106,37 +105,36 @@ app.get('/verificar', async (req, res) => {
             return res.json({ valid: true, AccountName: cachedUser.nombre });
         }
 
-        let intentos = 0;
         let nombreJugador = null;
 
-        while (intentos < cuentasApi.length) {
-            const cuenta = cuentasApi[indiceCuentaActual];
+        // Recorremos estrictamente el arreglo completo de cuentas de principio a fin en cada petición
+        for (let i = 0; i < cuentasApi.length; i++) {
+            const cuenta = cuentasApi[i];
             const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
 
-            console.log(`🔍 Probando con la cuenta índice [${indiceCuentaActual}] para el UID: ${uid}`);
+            console.log(`🔍 Probando con la cuenta índice [${i}] para el UID: ${uid}`);
 
             try {
                 const respuesta = await fetch(url);
                 const textoRespuesta = await respuesta.text();
 
                 if (textoRespuesta.trim().startsWith('<') || !respuesta.ok) {
-                    console.warn(`⚠️ La cuenta [${indiceCuentaActual}] devolvió HTML o error HTTP. Rotando...`);
+                    console.warn(`⚠️ La cuenta [${i}] devolvió HTML o error HTTP. Rotando a la siguiente...`);
                 } else {
                     const data = JSON.parse(textoRespuesta);
-                    console.log(`📥 Respuesta de API externa:`, data);
+                    console.log(`📥 Respuesta de API externa (cuenta [${i}]):`, data);
 
                     if (data.result && data.result.valid && data.result.AccountName) {
                         nombreJugador = data.result.AccountName;
-                        console.log(`✅ ¡Éxito! Jugador encontrado: ${nombreJugador} usando la cuenta [${indiceCuentaActual}]`);
-                        break;
+                        console.log(`✅ ¡Éxito! Jugador encontrado: ${nombreJugador} usando la cuenta [${i}]`);
+                        break; 
+                    } else {
+                        console.warn(`⚠️ La cuenta [${i}] dio false o respuesta inválida. Rotando...`);
                     }
                 }
             } catch (err) {
-                console.warn(`⚠️ Error al procesar la respuesta de la cuenta [${indiceCuentaActual}]`);
+                console.warn(`⚠️ Error de red o parseo en la cuenta [${i}]`);
             }
-
-            indiceCuentaActual = (indiceCuentaActual + 1) % cuentasApi.length;
-            intentos++;
         }
 
         if (nombreJugador) {
