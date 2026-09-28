@@ -14,6 +14,7 @@ mongoose.connect(uri)
 
 // --- 1. MODELOS DE MONGOOSE ---
 
+// Caché de UIDs en MongoDB (Cero caché en navegador para ahorrar peticiones)
 const cacheSchema = new mongoose.Schema({
     uid: { type: String, unique: true },
     nombre: String,
@@ -21,6 +22,7 @@ const cacheSchema = new mongoose.Schema({
 });
 const CacheModel = mongoose.model('uids_cache', cacheSchema);
 
+// Usuarios registrados
 const userSchema = new mongoose.Schema({
     name: String,
     email: { type: String, unique: true },
@@ -30,9 +32,10 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
+// Pedidos realizados
 const orderSchema = new mongoose.Schema({
     orderId: { type: String, unique: true },
-    identifier: String, 
+    identifier: String, // Correo del usuario para asociar sus pedidos
     uidFreeFire: String,
     playerName: String,
     packageType: String,
@@ -44,6 +47,7 @@ const orderSchema = new mongoose.Schema({
 });
 const Order = mongoose.model('Order', orderSchema);
 
+// IPs bloqueadas por seguridad
 const blockedIpSchema = new mongoose.Schema({
     ip: { type: String, unique: true },
     reason: String,
@@ -51,6 +55,7 @@ const blockedIpSchema = new mongoose.Schema({
 });
 const BlockedIp = mongoose.model('BlockedIp', blockedIpSchema);
 
+// Logs de verificación para el panel de administración
 const verificationLogSchema = new mongoose.Schema({
     ip: String,
     uid: String,
@@ -61,13 +66,13 @@ const verificationLogSchema = new mongoose.Schema({
 const VerificationLog = mongoose.model('VerificationLog', verificationLogSchema);
 
 
-// --- 2. CONFIGURACIÓN DE CUENTAS API (ROTACIÓN AUTOMÁTICA) ---
+// --- 2. CONFIGURACIÓN DE LAS 5 CUENTAS API (ROTACIÓN AUTOMÁTICA) ---
 const cuentasApi = [
-    { useruid: "US1sc9xwLJPZUPCFctlSkQeoa5r2", apiKey: "kaiqIA3oUtxFA9kBBaP9UZB8fBbFb1" }, // [0] 
-    { useruid: "qsYZfyr7CJW4oQChPrXyyYueRq2", apiKey: "Ss9QZiIqikUBOCSnBOT0Rxd8rBe9FR" }, // [1] 
-    { useruid: "elnyJoK2siVkw06ozYVrZI5dij12", apiKey: "CyyrdwCBH49kQ88MDRdWk2nGyvsCS" }, // [2] 
-    { useruid: "p8OmIYODcZwK7hyZeCMaxMQUH11", apiKey: "fWHilgMaQytoBK2ItMoD34C9CfzH1" }, // [3] 
-    { useruid: "N5RkJGYopvdfi2ckptkstByn5Ef2", apiKey: "hxrT1OIMKgWMOkyUzgxKheQbJP4sNp" }  // [4] 
+    { useruid: "US1sc9xwLJPZUPCFctlSkQeoa5r2", apiKey: "kaiqIA3oUtxFA9kBBaP9UZB8fBbFb1" }, // [0] Sin saldo / Referencia
+    { useruid: "qsYZfYr7CJW4qOQChPrXyyYueRq2", apiKey: "Ss9QZiIqikUBOCsNBoT0Rxd8rBe9FR" }, // [1] 
+    { useruid: "elnyJoK2siVkw06ozYVrZI5dij12", apiKey: "CyyrdwdCBH49kQ88MDRdWk2nGyvsCS" }, // [2] 
+    { useruid: "p8OmIYOXDcZWk7hyZeCMaXmQUHl1", apiKey: "fWHi1gMaQyitoBK2ItMoD34C9CfzH1" }, // [3] 
+    { useruid: "N5RkJGYopvdfi2ckptkstByn5Ef2", apiKey: "hxrT1OIMKgWMOkyUzgxKheQbJP4sNp" }  // [4] Principal
 ];
 
 
@@ -89,7 +94,7 @@ app.use(async (req, res, next) => {
 
 // --- 4. RUTAS DE LA API ---
 
-// A. Verificar UID con caché estricta en MongoDB y rotación de cuentas
+// A. Verificar UID consultando MongoDB primero y rotando cuentas si es necesario
 app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
     if (!uid) {
@@ -97,17 +102,17 @@ app.get('/verificar', async (req, res) => {
     }
 
     try {
-        // 1. Buscar primero en la base de datos (Caché en MongoDB para no gastar peticiones)
+        // 1. Buscar en MongoDB para evitar gastar peticiones si ya fue consultado antes
         const cachedUser = await CacheModel.findOne({ uid: uid });
         if (cachedUser) {
-            console.log(`⚡ UID ${uid} encontrado en Caché de MongoDB (Ahorro de petición).`);
+            console.log(`⚡ UID ${uid} encontrado en MongoDB (Ahorro de petición).`);
             await VerificationLog.create({ ip: req.clientIp, uid, success: true, playerName: cachedUser.nombre });
             return res.json({ valid: true, AccountName: cachedUser.nombre, cached: true });
         }
 
         let nombreJugador = null;
 
-        // 2. Si no está en caché, iterar por las cuentas API disponibles
+        // 2. Iterar por las 5 cuentas API con rotación automática ante fallos
         for (let i = 0; i < cuentasApi.length; i++) {
             const cuenta = cuentasApi[i];
             const url = `https://proapis.hlgamingofficial.com/main/games/freefire/validation/api?sectionName=freefireValidation&useruid=${cuenta.useruid}&api=${cuenta.apiKey}&uid=${uid}&region=US`;
@@ -125,7 +130,6 @@ app.get('/verificar', async (req, res) => {
 
                 const data = JSON.parse(textoRespuesta);
 
-                // Manejo de errores específicos para forzar rotación
                 if (data.error_code === "QUOTA_LIMIT_REACHED" || data.status === "quota_exceeded" || data.error === "Auth Failed") {
                     console.warn(`❌ Cuenta [${i}] falló (${data.error_code || data.error}). Rotando a la siguiente...`);
                     continue;
@@ -141,7 +145,7 @@ app.get('/verificar', async (req, res) => {
             }
         }
 
-        // 3. Guardar en caché de MongoDB si se encontró con éxito
+        // 3. Guardar en MongoDB y registrar log
         if (nombreJugador) {
             await CacheModel.create({ uid: uid, nombre: nombreJugador });
             await VerificationLog.create({ ip: req.clientIp, uid, success: true, playerName: nombreJugador });
@@ -212,7 +216,7 @@ app.post('/api/pedidos', async (req, res) => {
     }
 });
 
-// E. Consultar Pedidos
+// E. Consultar Pedidos (Soporta filtrado por correo con ?identifier=correo@domain.com)
 app.get('/api/pedidos', async (req, res) => {
     try {
         const { identifier, orderId } = req.query;
