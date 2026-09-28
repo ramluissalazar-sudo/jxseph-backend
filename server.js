@@ -145,7 +145,7 @@ app.get('/verificar', async (req, res) => {
             }
         }
 
-        // 3. Guardar en MongoDB y registrar log
+        // 3. Guardar en MongoDB y registrar log (los no válidos solo generan log, no caché)
         if (nombreJugador) {
             await CacheModel.create({ uid: uid, nombre: nombreJugador });
             await VerificationLog.create({ ip: req.clientIp, uid, success: true, playerName: nombreJugador });
@@ -231,11 +231,11 @@ app.get('/api/pedidos', async (req, res) => {
     }
 });
 
-// F. PANEL DE ADMIN: Ver pedidos pendientes
+// F. PANEL DE ADMIN: Ver todos los pedidos (para gestionar pendientes, completados y cancelados)
 app.get('/api/admin/pedidos', async (req, res) => {
     try {
-        const pendingOrders = await Order.find({ status: 'Pendiente' }).sort({ createdAt: -1 });
-        res.json(pendingOrders);
+        const orders = await Order.find().sort({ createdAt: -1 });
+        res.json(orders);
     } catch (error) {
         res.status(500).json({ error: 'Error al cargar los pedidos del panel.' });
     }
@@ -245,7 +245,7 @@ app.get('/api/admin/pedidos', async (req, res) => {
 app.put('/api/admin/pedidos/:id', async (req, res) => {
     try {
         const { status } = req.body; 
-        if (!['Completado', 'Cancelado'].includes(status)) {
+        if (!['Completado', 'Cancelado', 'Pendiente'].includes(status)) {
             return res.status(400).json({ error: 'Estado no válido.' });
         }
 
@@ -264,10 +264,30 @@ app.put('/api/admin/pedidos/:id', async (req, res) => {
 // H. PANEL DE ADMIN: Ver historial de UIDs verificados
 app.get('/api/admin/verificaciones', async (req, res) => {
     try {
-        const logs = await VerificationLog.find().sort({ timestamp: -1 }).limit(50);
+        const logs = await VerificationLog.find().sort({ timestamp: -1 });
         res.json(logs);
     } catch (error) {
         res.status(500).json({ error: 'Error al obtener los registros de verificación.' });
+    }
+});
+
+// H.1. PANEL DE ADMIN: Eliminar un registro de verificación individual
+app.delete('/api/admin/verificaciones/:id', async (req, res) => {
+    try {
+        await VerificationLog.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Registro eliminado correctamente.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al eliminar el registro.' });
+    }
+});
+
+// H.2. PANEL DE ADMIN: Vaciar todo el historial de verificaciones
+app.delete('/api/admin/verificaciones', async (req, res) => {
+    try {
+        await VerificationLog.deleteMany({});
+        res.json({ success: true, message: 'Historial de verificaciones vaciado correctamente.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al vaciar los registros.' });
     }
 });
 
@@ -280,7 +300,7 @@ app.post('/api/admin/bloquear-ip', async (req, res) => {
         await BlockedIp.create({ ip: targetIp, reason: reason || 'Actividad sospechosa' });
         res.json({ success: true, message: `IP ${targetIp} bloqueada correctamente.` });
     } catch (error) {
-        res.status(500).json({ error: 'Error al bloquear la IP en la base de datos.' });
+        res.status(500).json({ error: 'Error al bloquear la IP en la base de datos (posiblemente ya esté bloqueada).' });
     }
 });
 
