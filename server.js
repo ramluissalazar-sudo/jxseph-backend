@@ -116,12 +116,15 @@ app.get('/verificar', async (req, res) => {
             const respuesta = await fetch(url);
             const data = await respuesta.json();
 
+            // Si encuentra al jugador con éxito, guardamos el nombre y salimos del ciclo
             if (data.result && data.result.valid && data.result.AccountName) {
                 nombreJugador = data.result.AccountName;
                 break;
-            } else {
-                indiceCuentaActual = (indiceCuentaActual + 1) % cuentasApi.length;
-            }
+            } 
+
+            // Si la API responde con valid:false (por falta de peticiones o UID no existente),
+            // rotamos inmediatamente a la siguiente cuenta para probar suerte
+            indiceCuentaActual = (indiceCuentaActual + 1) % cuentasApi.length;
             intentos++;
         }
 
