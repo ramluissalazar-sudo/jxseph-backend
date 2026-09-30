@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const nodemailer = require('nodemailer');
+const bcrypt = require('bcrypt');
 
 const app = express();
 app.use(cors());
@@ -14,6 +16,19 @@ const uri = "mongodb+srv://jxsephadmin:TUNAX2g1y6BGQbYq@jxsephstoredb.mgemkee.mo
 mongoose.connect(uri)
 .then(() => console.log('✅ Conectado exitosamente a MongoDB Atlas'))
 .catch(err => console.error('❌ Error al conectar a la base de datos:', err));
+
+// --- CONFIGURACIÓN DE NODEMAILER PARA 2FA Y CORREOS ---
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: 'tu-correo@gmail.com',         // Cambia por tu correo de la tienda
+        pass: 'tu-contraseña-de-aplicacion'   // Cambia por tu contraseña de aplicación de Gmail
+    }
+});
+
+// Estructura temporal en memoria para los códigos 2FA (expiran en 5 minutos)
+const codigosVerificacion = new Map();
+
 
 // --- 1. MODELOS DE MONGOOSE ---
 
@@ -29,6 +44,8 @@ const userSchema = new mongoose.Schema({
     email: { type: String, unique: true },
     password: { type: String, required: false },
     phone: String,
+    pic: { type: String, default: '' },
+    twoFactorEnabled: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
 });
 const User = mongoose.model('User', userSchema);
@@ -165,11 +182,137 @@ app.post('/api/login', async (req, res) => {
         if (!user) {
             return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
         }
-        res.json({ success: true, user: { name: user.name, email: user.email } });
+        res.json({ 
+            success: true, 
+            user: { 
+                name: user.name, 
+                email: user.email, 
+                pic: user.pic, 
+                twoFactorEnabled: user.twoFactorEnabled 
+            } 
+        });
     } catch (error) {
         res.status(500).json({ error: 'Error en el servidor al iniciar sesión.' });
     }
 });
+
+// --- NUEVAS RUTAS DE AJUSTES Y PERFIL ---
+
+// Actualizar perfil (Nombre y Foto)
+app.put('/api/usuario/perfil', async (req, res) => {
+    try {
+        const { email, name, pic } = req.body;
+        const updatedUser = await User.findOneAndUpdate(
+            { email },
+            { name, pic },
+            { new: true }
+        );
+        if (!updatedUser) {
+            return res.status(404).json({ success: false, error: 'Usuario no encontrado.' });
+        }
+        res.json({ 
+            success: true, 
+            message: 'Perfil actualizado con éxito.', 
+            user: { name: updatedUser.name, email: updatedUser.email, pic: updatedUser.pic } 
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al actualizar el perfil.' });
+    }
+});
+
+// Cambiar Contraseña
+app.put('/api/usuario/password', async (req, res) => {
+    try {
+        const { email, currentPassword, newPassword } = req.body;
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'Usuario no encontrado.' });
+        }
+
+        // Validación simple de contraseña actual (puedes adaptarlo a bcrypt si usas hashes)
+        if (user.password && user.password !== currentPassword) {
+            return res.status(400).json({ success: false, error: 'La contraseña actual es incorrecta.' });
+        }
+
+        user.password = newPassword;
+        await user.save();
+        res.json({ success: true, message: 'Contraseña actualizada correctamente.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al cambiar la contraseña.' });
+    }
+});
+
+// --- RUTAS DE VERIFICACIÓN EN DOS PASOS (2FA) POR CORREO ---
+
+app.post('/api/2fa/enviar-codigo', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) {
+            return res.status(400).json({ success: false, error: 'El correo es obligatorio.' });
+        }
+
+        const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        codigosVerificacion.set(email, {
+            codigo,
+            expira: Date.now() + 5 * 60 * 1000 // 5 minutos de expiración
+        });
+
+        const mailOptions = {
+            from: '"Jxseph Store" <tu-correo@gmail.com>',
+            to: email,
+            subject: 'Código de verificación de seguridad - Jxseph Store',
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                    <h2 style="color: #0284c7;">Código de Verificación</h2>
+                    <p>Has solicitado realizar una acción de seguridad en tu cuenta de Jxseph Store.</p>
+                    <p>Tu código temporal es:</p>
+                    <h1 style="background: #f1f5f9; padding: 10px 20px; display: inline-block; letter-spacing: 5px; color: #0f172a;">${codigo}</h1>
+                    <p>Este código expirará en 5 minutos.</p>
+                </div>
+            `
+        };
+
+        await transporter.sendMail(mailOptions);
+        res.json({ success: true, message: 'Código enviado al correo electrónico.' });
+    } catch (error) {
+        console.error("Error enviando correo 2FA:", error);
+        res.status(500).json({ success: false, error: 'Error al enviar el correo de verificación.' });
+    }
+});
+
+app.post('/api/2fa/verificar-codigo', async (req, res) => {
+    try {
+        const { email, codigoIngresado, enable } = req.body;
+        const registro = codigosVerificacion.get(email);
+
+        if (!registro) {
+            return res.status(400).json({ success: false, error: 'No hay ningún código pendiente o ha expirado.' });
+        }
+
+        if (Date.now() > registro.expira) {
+            codigosVerificacion.delete(email);
+            return res.status(400).json({ success: false, error: 'El código ha expirado.' });
+        }
+
+        if (registro.codigo !== codigoIngresado) {
+            return res.status(400).json({ success: false, error: 'Código incorrecto.' });
+        }
+
+        codigosVerificacion.delete(email);
+
+        // Si se envió el parámetro enable, actualizamos el estado 2FA en la base de datos
+        if (typeof enable === 'boolean') {
+            await User.findOneAndUpdate({ email }, { twoFactorEnabled: enable });
+        }
+
+        res.json({ success: true, message: 'Verificación exitosa.' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Error al verificar el código.' });
+    }
+});
+
+// --- RUTAS DE PEDIDOS E HISTORIAL DE COMPRAS ---
 
 app.post('/api/pedidos', async (req, res) => {
     try {
@@ -195,17 +338,23 @@ app.post('/api/pedidos', async (req, res) => {
     }
 });
 
-app.get('/api/pedidos', async (req, res) => {
+// Endpoint para el historial de compras del usuario (Soporta /api/pedidos y /api/compras)
+app.get(['/api/pedidos', '/api/compras'], async (req, res) => {
     try {
-        const { identifier, orderId } = req.query;
+        const { identifier, email, orderId } = req.query;
         let query = {};
-        if (identifier) query.identifier = identifier;
+        
+        // Permite filtrar tanto por "identifier" como por "email"
+        const filtroUsuario = identifier || email;
+        if (filtroUsuario) query.identifier = filtroUsuario;
         if (orderId) query.orderId = orderId;
 
         const orders = await Order.find(query).sort({ createdAt: -1 });
-        res.json(orders);
+        
+        // Retorna con formato compatible para que el frontend lea "compras" o directamente el array
+        res.json({ success: true, compras: orders, orders });
     } catch (error) {
-        res.status(500).json({ error: 'Error al consultar los pedidos.' });
+        res.status(500).json({ error: 'Error al consultar el historial de compras.' });
     }
 });
 
