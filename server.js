@@ -21,8 +21,8 @@ mongoose.connect(uri)
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: 'tu-correo@gmail.com',         // Cambia por tu correo de la tienda
-        pass: 'tu-contraseña-de-aplicacion'   // Cambia por tu contraseña de aplicación de Gmail
+        user: 'jxsephstore@gmail.com',         // Cambia por tu correo de la tienda
+        pass: 'tpdpfogzrkoowzhv'   // Cambia por tu contraseña de aplicación de Gmail
     }
 });
 
