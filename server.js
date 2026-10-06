@@ -213,8 +213,9 @@ app.post('/api/redeem/canjear', async (req, res) => {
         }
 
         codeDoc.used = true;
-        codeDoc.usedByUid = uid || email || phone || 'Anónimo';
-        codeDoc.usedByName = playerName || email || 'Usuario';
+        // Si es Free Fire guarda el UID y Nombre, si es Roblox guarda indicando que es Giftcard
+        codeDoc.usedByUid = codeDoc.game === 'Free Fire' ? (uid || 'N/A') : 'Giftcard Entregada';
+        codeDoc.usedByName = codeDoc.game === 'Free Fire' ? (playerName || 'N/A') : (email || phone || 'Usuario Giftcard');
         await codeDoc.save();
 
         res.json({
@@ -250,10 +251,33 @@ app.post('/api/admin/redeem/generar', async (req, res) => {
     }
 });
 
+// Obtener todos los códigos detallados para el Panel Admin
+app.get('/api/admin/redeem/todos', async (req, res) => {
+    try {
+        const codigos = await RedeemCode.find().sort({ createdAt: -1 });
+        
+        const listaFormateada = codigos.map(c => ({
+            id: c._id,
+            code: c.code,
+            game: c.game,
+            packageType: c.packageType,
+            estado: c.used ? 'Canjeado' : 'Disponible',
+            canjeadoPor: {
+                uid: c.game === 'Free Fire' ? (c.usedByUid || 'Pendiente') : 'No aplica (Giftcard)',
+                playerName: c.game === 'Free Fire' ? (c.usedByName || 'Pendiente') : 'No aplica (Giftcard)'
+            },
+            fechaCreacion: c.createdAt
+        }));
+
+        res.json({ success: true, codigos: listaFormateada });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Error al obtener la lista de códigos.' });
+    }
+});
+
 
 // --- 5. RUTAS DE PEDIDOS Y PANEL ADMIN (CAPTURAS DE PAGO) ---
 
-// Guardar un pedido nuevo con la captura de pago
 app.post('/api/pedidos', async (req, res) => {
     try {
         const { identifier, uidFreeFire, playerName, packageType, phone, receiptImage } = req.body;
@@ -279,7 +303,6 @@ app.post('/api/pedidos', async (req, res) => {
     }
 });
 
-// Consultar historial de compras / pedidos
 app.get(['/api/pedidos', '/api/compras'], async (req, res) => {
     try {
         const { identifier, email, orderId } = req.query;
@@ -296,7 +319,6 @@ app.get(['/api/pedidos', '/api/compras'], async (req, res) => {
     }
 });
 
-// Obtener pedidos para el Panel Admin
 app.get('/api/admin/pedidos', async (req, res) => {
     try {
         const orders = await Order.find().sort({ createdAt: -1 });
@@ -306,7 +328,6 @@ app.get('/api/admin/pedidos', async (req, res) => {
     }
 });
 
-// Actualizar estado de un pedido desde el Admin (Completado / Cancelado / Pendiente)
 app.put('/api/admin/pedidos/:id', async (req, res) => {
     try {
         const { status } = req.body; 
@@ -326,7 +347,6 @@ app.put('/api/admin/pedidos/:id', async (req, res) => {
     }
 });
 
-// Eliminar un pedido desde el Admin
 app.delete('/api/admin/pedidos/:id', async (req, res) => {
     try {
         await Order.findByIdAndDelete(req.params.id);
