@@ -58,11 +58,24 @@ const orderSchema = new mongoose.Schema({
     packageType: String,
     phone: String,
     receiptImage: String,
+    game: { type: String, default: 'Free Fire' }, // Soporte para Free Fire y Roblox
     status: { type: String, default: 'Pendiente' },
     ipAddress: String,
     createdAt: { type: Date, default: Date.now }
 });
 const Order = mongoose.model('Order', orderSchema);
+
+// --- NUEVO: MODELO DE CÓDIGOS DE CANJE ---
+const redeemCodeSchema = new mongoose.Schema({
+    code: { type: String, unique: true },
+    game: String,            // 'Free Fire' o 'Roblox'
+    packageType: String,     // Paquete o recompensa
+    status: { type: String, default: 'Disponible' }, // Disponible, Pendiente, Canjeado
+    claimedByUid: String,    // ID o UID del jugador que lo canjeó
+    playerName: String,      // Nombre del jugador
+    createdAt: { type: Date, default: Date.now }
+});
+const RedeemCode = mongoose.model('RedeemCode', redeemCodeSchema);
 
 const blockedIpSchema = new mongoose.Schema({
     ip: { type: String, unique: true },
@@ -196,9 +209,8 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- NUEVAS RUTAS DE AJUSTES Y PERFIL ---
+// --- RUTAS DE AJUSTES Y PERFIL ---
 
-// Actualizar perfil (Nombre y Foto)
 app.put('/api/usuario/perfil', async (req, res) => {
     try {
         const { email, name, pic } = req.body;
@@ -220,7 +232,6 @@ app.put('/api/usuario/perfil', async (req, res) => {
     }
 });
 
-// Cambiar Contraseña
 app.put('/api/usuario/password', async (req, res) => {
     try {
         const { email, currentPassword, newPassword } = req.body;
@@ -229,7 +240,6 @@ app.put('/api/usuario/password', async (req, res) => {
             return res.status(404).json({ success: false, error: 'Usuario no encontrado.' });
         }
 
-        // Validación simple de contraseña actual (puedes adaptarlo a bcrypt si usas hashes)
         if (user.password && user.password !== currentPassword) {
             return res.status(400).json({ success: false, error: 'La contraseña actual es incorrecta.' });
         }
@@ -255,7 +265,7 @@ app.post('/api/2fa/enviar-codigo', async (req, res) => {
         
         codigosVerificacion.set(email, {
             codigo,
-            expira: Date.now() + 5 * 60 * 1000 // 5 minutos de expiración
+            expira: Date.now() + 5 * 60 * 1000 // 5 minutos
         });
 
         const mailOptions = {
@@ -301,7 +311,6 @@ app.post('/api/2fa/verificar-codigo', async (req, res) => {
 
         codigosVerificacion.delete(email);
 
-        // Si se envió el parámetro enable, actualizamos el estado 2FA en la base de datos
         if (typeof enable === 'boolean') {
             await User.findOneAndUpdate({ email }, { twoFactorEnabled: enable });
         }
@@ -316,7 +325,7 @@ app.post('/api/2fa/verificar-codigo', async (req, res) => {
 
 app.post('/api/pedidos', async (req, res) => {
     try {
-        const { identifier, uidFreeFire, playerName, packageType, phone, receiptImage } = req.body;
+        const { identifier, uidFreeFire, playerName, packageType, phone, receiptImage, game } = req.body;
         const orderId = 'JX-' + Math.floor(100000 + Math.random() * 900000);
 
         const newOrder = new Order({
@@ -327,6 +336,7 @@ app.post('/api/pedidos', async (req, res) => {
             packageType,
             phone,
             receiptImage,
+            game: game || 'Free Fire', // Guarda explícitamente el juego correspondiente
             ipAddress: req.clientIp
         });
 
@@ -338,20 +348,16 @@ app.post('/api/pedidos', async (req, res) => {
     }
 });
 
-// Endpoint para el historial de compras del usuario (Soporta /api/pedidos y /api/compras)
 app.get(['/api/pedidos', '/api/compras'], async (req, res) => {
     try {
         const { identifier, email, orderId } = req.query;
         let query = {};
         
-        // Permite filtrar tanto por "identifier" como por "email"
         const filtroUsuario = identifier || email;
         if (filtroUsuario) query.identifier = filtroUsuario;
         if (orderId) query.orderId = orderId;
 
         const orders = await Order.find(query).sort({ createdAt: -1 });
-        
-        // Retorna con formato compatible para que el frontend lea "compras" o directamente el array
         res.json({ success: true, compras: orders, orders });
     } catch (error) {
         res.status(500).json({ error: 'Error al consultar el historial de compras.' });
@@ -394,6 +400,47 @@ app.delete('/api/admin/pedidos/:id', async (req, res) => {
         res.status(500).json({ error: 'Error al eliminar el pedido.' });
     }
 });
+
+// --- RUTAS DE CÓDIGOS DE CANJE (PANEL ADMIN) ---
+
+app.get('/api/admin/codes', async (req, res) => {
+    try {
+        const codes = await RedeemCode.find().sort({ createdAt: -1 });
+        res.json(codes);
+    } catch (error) {
+        res.status(500).json({ error: 'Error al obtener los códigos.' });
+    }
+});
+
+app.post('/api/admin/codes/generate', async (req, res) => {
+    try {
+        const { game, packageType } = req.body;
+        const randomCode = 'JX-' + Math.random().toString(36).substring(2, 8).toUpperCase() + '-' + (game ? game.substring(0,2).toUpperCase() : 'FF');
+
+        const newCode = new RedeemCode({
+            code: randomCode,
+            game: game || 'Free Fire',
+            packageType,
+            status: 'Disponible'
+        });
+
+        await newCode.save();
+        res.json({ success: true, message: 'Código generado con éxito', code: newCode });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al generar el código.' });
+    }
+});
+
+app.delete('/api/admin/codes/:id', async (req, res) => {
+    try {
+        await RedeemCode.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Código eliminado.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al eliminar el código.' });
+    }
+});
+
+// --- RUTAS DE VERIFICACIONES Y SEGURIDAD IP ---
 
 app.get('/api/admin/verificaciones', async (req, res) => {
     try {
