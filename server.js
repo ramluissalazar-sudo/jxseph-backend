@@ -196,27 +196,43 @@ app.post('/api/redeem/verificar', async (req, res) => {
     }
 });
 
+// Ruta de canje optimizada y blindada contra condiciones de carrera
 app.post('/api/redeem/canjear', async (req, res) => {
     try {
         const { code, uid, playerName, email, phone } = req.body;
         if (!code) return res.status(400).json({ success: false, message: 'Falta el código.' });
 
         const cleanCode = code.trim().toUpperCase();
-        const codeDoc = await RedeemCode.findOne({ code: cleanCode });
-
-        if (!codeDoc) {
+        
+        // Primero consultamos el documento para saber a qué juego pertenece y armar los datos correspondientes
+        const tempDoc = await RedeemCode.findOne({ code: cleanCode });
+        if (!tempDoc) {
             return res.status(404).json({ success: false, message: 'El código no existe.' });
         }
 
-        if (codeDoc.used) {
-            return res.status(400).json({ success: false, message: 'Este código ya fue canjeado anteriormente.' });
-        }
+        const isFreeFire = tempDoc.game === 'Free Fire';
+        const assignedUid = isFreeFire ? (uid || 'N/A') : 'Giftcard Entregada';
+        const assignedName = isFreeFire ? (playerName || 'N/A') : (email || phone || 'Usuario Giftcard');
 
-        codeDoc.used = true;
-        // Si es Free Fire guarda el UID y Nombre, si es Roblox guarda indicando que es Giftcard
-        codeDoc.usedByUid = codeDoc.game === 'Free Fire' ? (uid || 'N/A') : 'Giftcard Entregada';
-        codeDoc.usedByName = codeDoc.game === 'Free Fire' ? (playerName || 'N/A') : (email || phone || 'Usuario Giftcard');
-        await codeDoc.save();
+        // Búsqueda y actualización atómica: solo actualiza si 'used' sigue siendo false
+        const codeDoc = await RedeemCode.findOneAndUpdate(
+            { code: cleanCode, used: false },
+            { 
+                $set: { 
+                    used: true,
+                    usedByUid: assignedUid,
+                    usedByName: assignedName
+                } 
+            },
+            { new: true }
+        );
+
+        if (!codeDoc) {
+            return res.status(400).json({ 
+                success: false, 
+                message: '¡Llegaste tarde! Este código acaba de ser canjeado por otro usuario.' 
+            });
+        }
 
         res.json({
             success: true,
