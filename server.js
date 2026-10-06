@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const app = express();
 app.use(cors());
 
+// Límites ampliados para aceptar imágenes de comprobantes grandes en Base64
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
@@ -37,6 +38,31 @@ const redeemCodeSchema = new mongoose.Schema({
 });
 const RedeemCode = mongoose.model('RedeemCode', redeemCodeSchema);
 
+// Modelo para los Pedidos (Formularios con captura de pago)
+const orderSchema = new mongoose.Schema({
+    orderId: { type: String, unique: true },
+    identifier: String,
+    uidFreeFire: String,
+    playerName: String,
+    packageType: String,
+    phone: String,
+    receiptImage: String,
+    status: { type: String, default: 'Pendiente' },
+    ipAddress: String,
+    createdAt: { type: Date, default: Date.now }
+});
+const Order = mongoose.model('Order', orderSchema);
+
+// Modelo para registros de verificación
+const verificationLogSchema = new mongoose.Schema({
+    ip: String,
+    uid: String,
+    success: Boolean,
+    playerName: String,
+    timestamp: { type: Date, default: Date.now }
+});
+const VerificationLog = mongoose.model('VerificationLog', verificationLogSchema);
+
 
 // --- 2. CONFIGURACIÓN DE LAS 5 CUENTAS API (FREE FIRE) ---
 const cuentasApi = [
@@ -51,6 +77,8 @@ const cuentasApi = [
 // --- 3. RUTAS DE VERIFICACIÓN DE UID (FREE FIRE) ---
 app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
     if (!uid) {
         return res.status(400).json({ valid: false, error: "Falta el UID" });
     }
@@ -58,6 +86,7 @@ app.get('/verificar', async (req, res) => {
     try {
         const cachedUser = await CacheModel.findOne({ uid: uid });
         if (cachedUser) {
+            await VerificationLog.create({ ip: clientIp, uid, success: true, playerName: cachedUser.nombre });
             return res.json({ valid: true, AccountName: cachedUser.nombre, cached: true });
         }
 
@@ -86,12 +115,15 @@ app.get('/verificar', async (req, res) => {
 
         if (nombreJugador) {
             await CacheModel.create({ uid: uid, nombre: nombreJugador });
+            await VerificationLog.create({ ip: clientIp, uid, success: true, playerName: nombreJugador });
             return res.json({ valid: true, AccountName: nombreJugador, cached: false });
         } else {
+            await VerificationLog.create({ ip: clientIp, uid, success: false, playerName: 'No encontrado' });
             return res.json({ valid: false, error: "UID no válido o cuentas agotadas" });
         }
 
     } catch (error) {
+        await VerificationLog.create({ ip: clientIp, uid, success: false, playerName: 'Error de servidor' });
         return res.status(500).json({ valid: false, error: "Error interno del servidor" });
     }
 });
@@ -136,9 +168,8 @@ app.post('/api/verificar-id', async (req, res) => {
 });
 
 
-// --- 4. RUTAS DE CÓDIGOS DE CANJE (REDEEM) GUARDADOS EN MONGODB ---
+// --- 4. RUTAS DE CÓDIGOS DE CANJE (REDEEM) ---
 
-// Verificar si un código existe y no ha sido usado
 app.post('/api/redeem/verificar', async (req, res) => {
     try {
         const { code } = req.body;
@@ -165,7 +196,6 @@ app.post('/api/redeem/verificar', async (req, res) => {
     }
 });
 
-// Procesar el canje final y marcarlo como usado en MongoDB
 app.post('/api/redeem/canjear', async (req, res) => {
     try {
         const { code, uid, playerName, email, phone } = req.body;
@@ -182,7 +212,6 @@ app.post('/api/redeem/canjear', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Este código ya fue canjeado anteriormente.' });
         }
 
-        // Actualizamos el código como usado y guardamos los datos de quién lo reclamó
         codeDoc.used = true;
         codeDoc.usedByUid = uid || email || phone || 'Anónimo';
         codeDoc.usedByName = playerName || email || 'Usuario';
@@ -197,24 +226,113 @@ app.post('/api/redeem/canjear', async (req, res) => {
     }
 });
 
-// Ruta extra para que puedas crear códigos nuevos fácilmente desde Postman, tu navegador o un panel futuro
-app.post('/api/admin/redeem/crear', async (req, res) => {
+// Generar códigos automáticamente con formato JXSEPH-(RANDOM) desde el panel admin
+app.post('/api/admin/redeem/generar', async (req, res) => {
     try {
-        const { code, game, packageType } = req.body;
-        if (!code || !game || !packageType) {
-            return res.status(400).json({ success: false, error: 'Faltan datos (code, game, packageType).' });
+        const { game, packageType } = req.body;
+        if (!game || !packageType) {
+            return res.status(400).json({ success: false, error: 'Faltan datos (game, packageType).' });
         }
 
+        const randomPart = Math.random().toString(36).substring(2, 10).toUpperCase();
+        const code = `JXSEPH-${randomPart}`;
+
         const nuevoCodigo = new RedeemCode({
-            code: code.trim().toUpperCase(),
+            code,
             game,
             packageType
         });
 
         await nuevoCodigo.save();
-        res.json({ success: true, message: `Código ${nuevoCodigo.code} creado con éxito.` });
+        res.json({ success: true, message: `Código ${code} generado con éxito.`, code });
     } catch (error) {
-        res.status(500).json({ success: false, error: 'El código ya existe o hubo un error al guardarlo.' });
+        res.status(500).json({ success: false, error: 'Error al generar el código en la base de datos.' });
+    }
+});
+
+
+// --- 5. RUTAS DE PEDIDOS Y PANEL ADMIN (CAPTURAS DE PAGO) ---
+
+// Guardar un pedido nuevo con la captura de pago
+app.post('/api/pedidos', async (req, res) => {
+    try {
+        const { identifier, uidFreeFire, playerName, packageType, phone, receiptImage } = req.body;
+        const orderId = 'JX-' + Math.floor(100000 + Math.random() * 900000);
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+        const newOrder = new Order({
+            orderId,
+            identifier,
+            uidFreeFire,
+            playerName,
+            packageType,
+            phone,
+            receiptImage,
+            ipAddress: clientIp
+        });
+
+        await newOrder.save();
+        res.json({ success: true, orderId, message: 'Pedido creado exitosamente.' });
+    } catch (error) {
+        console.error("Error al guardar pedido:", error);
+        res.status(500).json({ error: 'Error al procesar el pedido.' });
+    }
+});
+
+// Consultar historial de compras / pedidos
+app.get(['/api/pedidos', '/api/compras'], async (req, res) => {
+    try {
+        const { identifier, email, orderId } = req.query;
+        let query = {};
+        
+        const filtroUsuario = identifier || email;
+        if (filtroUsuario) query.identifier = filtroUsuario;
+        if (orderId) query.orderId = orderId;
+
+        const orders = await Order.find(query).sort({ createdAt: -1 });
+        res.json({ success: true, compras: orders, orders });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al consultar el historial de compras.' });
+    }
+});
+
+// Obtener pedidos para el Panel Admin
+app.get('/api/admin/pedidos', async (req, res) => {
+    try {
+        const orders = await Order.find().sort({ createdAt: -1 });
+        res.json(orders);
+    } catch (error) {
+        res.status(500).json({ error: 'Error al cargar los pedidos del panel.' });
+    }
+});
+
+// Actualizar estado de un pedido desde el Admin (Completado / Cancelado / Pendiente)
+app.put('/api/admin/pedidos/:id', async (req, res) => {
+    try {
+        const { status } = req.body; 
+        if (!['Completado', 'Cancelado', 'Pendiente'].includes(status)) {
+            return res.status(400).json({ error: 'Estado no válido.' });
+        }
+
+        const updatedOrder = await Order.findByIdAndUpdate(
+            req.params.id, 
+            { status }, 
+            { new: true }
+        );
+
+        res.json({ success: true, message: `Pedido actualizado a ${status}`, updatedOrder });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al actualizar el pedido.' });
+    }
+});
+
+// Eliminar un pedido desde el Admin
+app.delete('/api/admin/pedidos/:id', async (req, res) => {
+    try {
+        await Order.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Pedido eliminado correctamente.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al eliminar el pedido.' });
     }
 });
 
