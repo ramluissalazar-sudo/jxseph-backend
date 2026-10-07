@@ -4,17 +4,19 @@ const mongoose = require('mongoose');
 
 const app = express();
 
-// 1. RESTRINGIR PETICIONES (Solo tu página web puede hacer solicitudes)
+// 1. RESTRINGIR PETICIONES (Agregado tu panel en Netlify, tu tienda y localhost)
 const whitelist = [
+    'https://jxsephpaneladmin.netlify.app',
     'https://jxsephstore.shop',
     'https://www.jxsephstore.shop',
-    'http://localhost:3000', // Por si pruebas localmente en tu PC
-    'http://127.0.0.1:3000'
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5500',
+    'http://127.0.0.1:5500'
 ];
 
 const corsOptions = {
     origin: function (origin, callback) {
-        // Permitir herramientas como Postman o apps sin origen definido, pero bloquear webs ajenas
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -94,13 +96,17 @@ const VerificationLog = mongoose.model('VerificationLog', verificationLogSchema)
 
 // --- MIDDLEWARE PARA BLOQUEAR IPS BANEADAS ---
 app.use(async (req, res, next) => {
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    if (clientIp && clientIp.includes(',')) {
+        clientIp = clientIp.split(',')[0].trim();
+    }
     try {
         const isBlocked = await BlockedIp.findOne({ ip: clientIp });
         if (isBlocked) {
-            return res.status(403).json({ error: 'Tu dirección IP ha sido bloqueada por seguridad.' });
+            return res.status(403).json({ success: false, error: 'Tu dirección IP ha sido bloqueada por seguridad.' });
         }
     } catch (e) {}
+    req.clientIp = clientIp || 'Desconocida';
     next();
 });
 
@@ -115,7 +121,7 @@ const cuentasApi = [
 ];
 
 
-// --- RUTAS DE VERIFICACIÓN DE UID (MEJORADAS PARA EL PANEL) ---
+// --- RUTAS DE VERIFICACIÓN DE UID ---
 async function procesarVerificacionUid(uid, clientIp) {
     try {
         const cachedUser = await CacheModel.findOne({ uid: uid });
@@ -159,7 +165,7 @@ async function procesarVerificacionUid(uid, clientIp) {
 
 app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const clientIp = req.clientIp;
     if (!uid) return res.status(400).json({ valid: false, error: "Falta el UID" });
     const resultado = await procesarVerificacionUid(uid, clientIp);
     res.json(resultado);
@@ -167,13 +173,13 @@ app.get('/verificar', async (req, res) => {
 
 app.post('/api/verificar-id', async (req, res) => {
     const { uid } = req.body;
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const clientIp = req.clientIp;
     if (!uid) return res.status(400).json({ success: false, error: "Falta el UID" });
     const resultado = await procesarVerificacionUid(uid, clientIp);
     res.json({ success: resultado.valid, playerName: resultado.AccountName || null, error: resultado.error });
 });
 
-// NUEVA RUTA: Ver el historial de verificaciones en tu panel admin
+// Ruta para ver el historial de verificaciones en tu panel admin
 app.get('/api/admin/verificaciones', async (req, res) => {
     try {
         const logs = await VerificationLog.find().sort({ createdAt: -1 }).limit(100);
@@ -183,12 +189,16 @@ app.get('/api/admin/verificaciones', async (req, res) => {
     }
 });
 
-// NUEVA RUTA: Bloquear una IP desde el panel admin
+// Ruta para bloquear una IP desde el panel admin
 app.post('/api/admin/bloquear-ip', async (req, res) => {
     try {
         const { ip, reason } = req.body;
         if (!ip) return res.status(400).json({ success: false, error: 'Falta la IP.' });
-        await BlockedIp.create({ ip, reason: reason || 'Bloqueado por administrador' });
+        await BlockedIp.findOneAndUpdate(
+            { ip },
+            { reason: reason || 'Bloqueado por administrador', createdAt: Date.now() },
+            { upsert: true, new: true }
+        );
         res.json({ success: true, message: `IP ${ip} bloqueada correctamente.` });
     } catch (error) {
         res.status(500).json({ success: false, error: 'Error al bloquear la IP.' });
@@ -276,15 +286,14 @@ app.get('/api/admin/redeem/todos', async (req, res) => {
 });
 
 
-// --- RUTAS DE PEDIDOS (CORREGIDO ID DE ORDEN UNIFICADO) ---
+// --- RUTAS DE PEDIDOS ---
 
 app.post('/api/pedidos', async (req, res) => {
     try {
         const { orderId: orderIdCliente, identifier, uidFreeFire, playerName, packageType, phone, receiptImage } = req.body;
         
-        // Si el cliente ya mandó un orderId, usamos ese exacto. Si no, generamos uno nuevo.
         const orderId = orderIdCliente || ('JX-' + Math.floor(100000 + Math.random() * 900000));
-        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const clientIp = req.clientIp;
 
         const newOrder = new Order({
             orderId,
