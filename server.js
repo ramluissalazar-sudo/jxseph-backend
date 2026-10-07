@@ -76,6 +76,7 @@ const orderSchema = new mongoose.Schema({
     playerName: String,
     packageType: String,
     phone: String,
+    reference: String,
     receiptImage: String,
     status: { type: String, default: 'Pendiente' },
     ipAddress: String,
