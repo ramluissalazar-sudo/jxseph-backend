@@ -227,7 +227,7 @@ app.post('/api/redeem/verificar', async (req, res) => {
 
 app.post('/api/redeem/canjear', async (req, res) => {
     try {
-        const { code, uid, playerName, email, phone } = req.body;
+        const { code, uid, playerName, email, phone, contacto } = req.body;
         if (!code) return res.status(400).json({ success: false, message: 'Falta el código.' });
         const cleanCode = code.trim().toUpperCase();
         
@@ -236,7 +236,10 @@ app.post('/api/redeem/canjear', async (req, res) => {
 
         const isFreeFire = tempDoc.game === 'Free Fire';
         const assignedUid = isFreeFire ? (uid || 'N/A') : 'Giftcard Entregada';
-        const assignedName = isFreeFire ? (playerName || 'N/A') : (email || phone || 'Usuario Giftcard');
+        
+        // Captura estructurada para Roblox (Email + Teléfono) o Free Fire
+        let datoRoblox = email && phone ? `Email: ${email} | Tel: ${phone}` : (email || phone || contacto);
+        const assignedName = isFreeFire ? (playerName || 'N/A') : (datoRoblox ? String(datoRoblox).trim() : 'Sin contacto');
 
         const codeDoc = await RedeemCode.findOneAndUpdate(
             { code: cleanCode, used: false },
@@ -276,13 +279,23 @@ app.get('/api/admin/redeem/todos', async (req, res) => {
             estado: c.used ? 'Canjeado' : 'Disponible',
             canjeadoPor: {
                 uid: c.game === 'Free Fire' ? (c.usedByUid || 'Pendiente') : 'No aplica',
-                playerName: c.game === 'Free Fire' ? (c.usedByName || 'Pendiente') : 'No aplica'
+                playerName: c.game === 'Free Fire' ? (c.usedByName || 'Pendiente') : (c.usedByName || 'No aplica')
             },
             fechaCreacion: c.createdAt
         }));
         res.json({ success: true, codigos: listaFormateada });
     } catch (error) {
         res.status(500).json({ error: 'Error al obtener códigos.' });
+    }
+});
+
+// Ruta para eliminar códigos de canje (por si te equivocas al crearlos)
+app.delete('/api/admin/redeem/:id', async (req, res) => {
+    try {
+        await RedeemCode.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Código eliminado correctamente.' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Error al eliminar el código.' });
     }
 });
 
