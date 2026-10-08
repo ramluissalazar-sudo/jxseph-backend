@@ -32,15 +32,12 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 const uri = "mongodb+srv://jxsephadmin:TUNAX2g1y6BGQbYq@jxsephstoredb.mgemkee.mongodb.net/jxseph_store?retryWrites=true&w=majority&appName=JxsephStoreDB";
-
 mongoose.connect(uri)
 .then(() => console.log('✅ Conectado exitosamente a MongoDB Atlas'))
 .catch(err => console.error('❌ Error al conectar a la base de datos:', err));
 
-
 // --- MODELOS DE MONGOOSE ---
 
-// Lista de IPs bloqueadas (Baneadas)
 const blockedIpSchema = new mongoose.Schema({
     ip: { type: String, unique: true },
     reason: String,
@@ -48,7 +45,6 @@ const blockedIpSchema = new mongoose.Schema({
 });
 const BlockedIp = mongoose.model('BlockedIp', blockedIpSchema);
 
-// Cache para UID de Free Fire
 const cacheSchema = new mongoose.Schema({
     uid: { type: String, unique: true },
     nombre: String,
@@ -68,7 +64,14 @@ const redeemCodeSchema = new mongoose.Schema({
 });
 const RedeemCode = mongoose.model('RedeemCode', redeemCodeSchema);
 
-// Modelo de Pedidos (Con número de orden unificado)
+// Nuevo Esquema para Controlar el Cooldown de Canjes por UID (1 hora)
+const redeemCooldownSchema = new mongoose.Schema({
+    uid: { type: String, unique: true, required: true },
+    lastRedeemTime: { type: Date, required: true }
+});
+const RedeemCooldown = mongoose.model('RedeemCooldown', redeemCooldownSchema);
+
+// Modelo de Pedidos
 const orderSchema = new mongoose.Schema({
     orderId: { type: String, unique: true },
     identifier: String,
@@ -84,16 +87,14 @@ const orderSchema = new mongoose.Schema({
 });
 const Order = mongoose.model('Order', orderSchema);
 
-// Modelo de Verificaciones de ID mejorado
 const verificationLogSchema = new mongoose.Schema({
     ip: String,
     uid: String,
     success: Boolean,
     playerName: String,
-    createdAt: { type: Date, default: Date.now } // Guarda fecha y hora exacta
+    createdAt: { type: Date, default: Date.now }
 });
 const VerificationLog = mongoose.model('VerificationLog', verificationLogSchema);
-
 
 // --- MIDDLEWARE PARA BLOQUEAR IPS BANEADAS ---
 app.use(async (req, res, next) => {
@@ -111,7 +112,6 @@ app.use(async (req, res, next) => {
     next();
 });
 
-
 // --- CONFIGURACIÓN DE LAS 5 CUENTAS API (FREE FIRE) ---
 const cuentasApi = [
     { useruid: "US1sc9xwLJPZUPCFctlSkQeoa5r2", apiKey: "kaiqIA3oUtxFA9kBBaP9UZB8fBbFb1" },
@@ -121,8 +121,6 @@ const cuentasApi = [
     { useruid: "N5RkJGYopvdfi2ckptkstByn5Ef2", apiKey: "hxrT1OIMKgWMOkyUzgxKheQbJP4sNp" }
 ];
 
-
-// --- RUTAS DE VERIFICACIÓN DE UID ---
 async function procesarVerificacionUid(uid, clientIp) {
     try {
         const cachedUser = await CacheModel.findOne({ uid: uid });
@@ -142,7 +140,6 @@ async function procesarVerificacionUid(uid, clientIp) {
                 if (textoRespuesta.trim().startsWith('<') || !respuesta.ok) continue;
                 const data = JSON.parse(textoRespuesta);
                 if (data.error_code === "QUOTA_LIMIT_REACHED" || data.status === "quota_exceeded" || data.error === "Auth Failed") continue;
-
                 if (data.result && data.result.valid && data.result.AccountName) {
                     nombreJugador = data.result.AccountName;
                     break;
@@ -180,7 +177,6 @@ app.post('/api/verificar-id', async (req, res) => {
     res.json({ success: resultado.valid, playerName: resultado.AccountName || null, error: resultado.error });
 });
 
-// Ruta para ver el historial de verificaciones en tu panel admin
 app.get('/api/admin/verificaciones', async (req, res) => {
     try {
         const logs = await VerificationLog.find().sort({ createdAt: -1 }).limit(100);
@@ -190,7 +186,6 @@ app.get('/api/admin/verificaciones', async (req, res) => {
     }
 });
 
-// Ruta para bloquear una IP desde el panel admin
 app.post('/api/admin/bloquear-ip', async (req, res) => {
     try {
         const { ip, reason } = req.body;
@@ -205,7 +200,6 @@ app.post('/api/admin/bloquear-ip', async (req, res) => {
         res.status(500).json({ success: false, error: 'Error al bloquear la IP.' });
     }
 });
-
 
 // --- RUTAS DE CÓDIGOS DE CANJE ---
 
@@ -235,9 +229,26 @@ app.post('/api/redeem/canjear', async (req, res) => {
         if (!tempDoc) return res.status(404).json({ success: false, message: 'El código no existe.' });
 
         const isFreeFire = tempDoc.game === 'Free Fire';
+
+        // VALIDACIÓN DE COOLDOWN DE 1 HORA PARA FREE FIRE
+        if (isFreeFire && uid) {
+            const cooldownRegistro = await RedeemCooldown.findOne({ uid: uid });
+            if (cooldownRegistro) {
+                const tiempoTranscurrido = Date.now() - new Date(cooldownRegistro.lastRedeemTime).getTime();
+                const unaHoraEnMilisegundos = 60 * 60 * 1000;
+
+                if (tiempoTranscurrido < unaHoraEnMilisegundos) {
+                    const minutosRestantes = Math.ceil((unaHoraEnMilisegundos - tiempoTranscurrido) / (60 * 1000));
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: `⏳ Ya has canjeado un código recientemente. Debes esperar ${minutosRestantes} minuto(s) más para volver a canjear con este UID.` 
+                    });
+                }
+            }
+        }
+
         const assignedUid = isFreeFire ? (uid || 'N/A') : 'Giftcard Entregada';
         
-        // Captura estructurada para Roblox (Email + Teléfono) o Free Fire
         let datoRoblox = email && phone ? `Email: ${email} | Tel: ${phone}` : (email || phone || contacto);
         const assignedName = isFreeFire ? (playerName || 'N/A') : (datoRoblox ? String(datoRoblox).trim() : 'Sin contacto');
 
@@ -246,8 +257,16 @@ app.post('/api/redeem/canjear', async (req, res) => {
             { $set: { used: true, usedByUid: assignedUid, usedByName: assignedName } },
             { new: true }
         );
-
         if (!codeDoc) return res.status(400).json({ success: false, message: 'Este código acaba de ser canjeado por otro usuario.' });
+
+        // GUARDAR/ACTUALIZAR EL TIEMPO DE COOLDOWN SI ES FREE FIRE
+        if (isFreeFire && uid) {
+            await RedeemCooldown.findOneAndUpdate(
+                { uid: uid },
+                { lastRedeemTime: new Date() },
+                { upsert: true, new: true }
+            );
+        }
 
         res.json({ success: true, message: '¡Canje procesado exitosamente!' });
     } catch (error) {
@@ -289,22 +308,36 @@ app.get('/api/admin/redeem/todos', async (req, res) => {
     }
 });
 
-// Ruta para eliminar códigos de canje (por si te equivocas al crearlos)
+// RUTA CORREGIDA: Permite eliminar tanto por ID interno de Mongo como por el código de texto exacto
 app.delete('/api/admin/redeem/:id', async (req, res) => {
     try {
-        await RedeemCode.findByIdAndDelete(req.params.id);
+        let parametro = req.params.id;
+        let resultado = null;
+
+        // Comprobamos si es un ObjectId válido de Mongoose o si es el texto del código (ej: JXSEPH-XXXX)
+        if (mongoose.Types.ObjectId.isValid(parametro)) {
+            resultado = await RedeemCode.findByIdAndDelete(parametro);
+        }
+        
+        if (!resultado) {
+            resultado = await RedeemCode.findOneAndDelete({ code: parametro.toUpperCase() });
+        }
+
+        if (!resultado) {
+            return res.status(404).json({ success: false, error: 'Código no encontrado en la base de datos.' });
+        }
+
         res.json({ success: true, message: 'Código eliminado correctamente.' });
     } catch (error) {
         res.status(500).json({ success: false, error: 'Error al eliminar el código.' });
     }
 });
 
-
 // --- RUTAS DE PEDIDOS ---
 
 app.post('/api/pedidos', async (req, res) => {
     try {
-        const { orderId: orderIdCliente, identifier, uidFreeFire, playerName, packageType, phone, receiptImage } = req.body;
+        const { orderId: orderIdCliente, identifier, uidFreeFire, playerName, packageType, phone, reference, receiptImage } = req.body;
         
         const orderId = orderIdCliente || ('JX-' + Math.floor(100000 + Math.random() * 900000));
         const clientIp = req.clientIp;
@@ -316,6 +349,7 @@ app.post('/api/pedidos', async (req, res) => {
             playerName,
             packageType,
             phone,
+            reference, // Referencia de pago de 6 dígitos recibida correctamente
             receiptImage,
             ipAddress: clientIp
         });
@@ -373,7 +407,6 @@ app.delete('/api/admin/pedidos/:id', async (req, res) => {
         res.status(500).json({ error: 'Error al eliminar pedido.' });
     }
 });
-
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
