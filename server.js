@@ -36,7 +36,7 @@ mongoose.connect(uri)
 .then(() => console.log('✅ Conectado exitosamente a MongoDB Atlas'))
 .catch(err => console.error('❌ Error al conectar a la base de datos:', err));
 
-// --- MODELOS DE MONGOOSE ---
+// --- MODELOS DE MONGOOSE EXISTENTES ---
 
 const blockedIpSchema = new mongoose.Schema({
     ip: { type: String, unique: true },
@@ -96,7 +96,7 @@ const verificationLogSchema = new mongoose.Schema({
 });
 const VerificationLog = mongoose.model('VerificationLog', verificationLogSchema);
 
-// --- MIDDLEWARE PARA BLOQUEAR IPS BANEADAS ---
+// --- MIDDLEWARE PARA BLOQUEAR IPS BANEADAS (REDIRECCIÓN A /suspendido/) ---
 app.use(async (req, res, next) => {
     let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (clientIp && clientIp.includes(',')) {
@@ -105,7 +105,13 @@ app.use(async (req, res, next) => {
     try {
         const isBlocked = await BlockedIp.findOne({ ip: clientIp });
         if (isBlocked) {
-            return res.status(403).json({ success: false, error: 'Tu dirección IP ha sido bloqueada por seguridad.' });
+            const razon = encodeURIComponent(isBlocked.reason || 'Violación de políticas de seguridad');
+            
+            if (req.headers.accept && req.headers.accept.includes('application/json')) {
+                return res.status(403).json({ success: false, error: 'IP bloqueada', reason: isBlocked.reason });
+            }
+            
+            return res.redirect(`https://www.jxsephstore.shop/suspendido/?reason=${razon}`);
         }
     } catch (e) {}
     req.clientIp = clientIp || 'Desconocida';
@@ -308,13 +314,11 @@ app.get('/api/admin/redeem/todos', async (req, res) => {
     }
 });
 
-// RUTA CORREGIDA: Permite eliminar tanto por ID interno de Mongo como por el código de texto exacto
 app.delete('/api/admin/redeem/:id', async (req, res) => {
     try {
         let parametro = req.params.id;
         let resultado = null;
 
-        // Comprobamos si es un ObjectId válido de Mongoose o si es el texto del código (ej: JXSEPH-XXXX)
         if (mongoose.Types.ObjectId.isValid(parametro)) {
             resultado = await RedeemCode.findByIdAndDelete(parametro);
         }
@@ -349,12 +353,21 @@ app.post('/api/pedidos', async (req, res) => {
             playerName,
             packageType,
             phone,
-            reference, // Referencia de pago de 6 dígitos recibida correctamente
+            reference,
             receiptImage,
             ipAddress: clientIp
         });
 
         await newOrder.save();
+
+        // Si el cliente está registrado con su correo, incrementamos su contador de compras totales (+1)
+        if (identifier) {
+            await UserAuth.findOneAndUpdate(
+                { email: identifier.toLowerCase().trim() },
+                { $inc: { totalCompras: 1 } }
+            );
+        }
+
         res.json({ success: true, orderId, message: 'Pedido creado exitosamente.' });
     } catch (error) {
         console.error("Error al guardar pedido:", error);
@@ -407,6 +420,255 @@ app.delete('/api/admin/pedidos/:id', async (req, res) => {
         res.status(500).json({ error: 'Error al eliminar pedido.' });
     }
 });
+
+
+// =========================================================
+// --- INICIO DE NUEVAS APIS (PROGRAMA, SESIONES Y DESBLOQUEO) ---
+// =========================================================
+
+// --- NUEVOS MODELOS PARA USUARIOS Y CUPONES DE AFILIADOS ---
+const userAuthSchema = new mongoose.Schema({
+    nombre: { type: String, required: true },
+    email: { type: String, unique: true, required: true },
+    password: { type: String },
+    telefono: { type: String },
+    googleId: { type: String },
+    codigoAfiliado: { type: String, unique: true, uppercase: true },
+    totalCompras: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now }
+});
+const UserAuth = mongoose.model('UserAuth', userAuthSchema);
+
+const affiliateCouponSchema = new mongoose.Schema({
+    code: { type: String, unique: true, uppercase: true, required: true },
+    discountPercentage: { type: Number, required: true },
+    createdByEmail: { type: String },
+    active: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now }
+});
+const AffiliateCoupon = mongoose.model('AffiliateCoupon', affiliateCouponSchema);
+
+
+// --- RUTAS DE AUTENTICACIÓN Y SESIÓN ---
+
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { nombre, telefono, email, password } = req.body;
+        if (!email || !password || !nombre) {
+            return res.status(400).json({ success: false, message: 'Faltan datos obligatorios.' });
+        }
+
+        const existingUser = await UserAuth.findOne({ email: email.toLowerCase().trim() });
+        if (existingUser) {
+            return res.status(400).json({ success: false, message: 'Este correo ya está registrado.' });
+        }
+
+        const codigoAfiliado = "JXSEPH" + Math.floor(1000 + Math.random() * 9000);
+
+        const newUser = new UserAuth({
+            nombre,
+            telefono,
+            email: email.toLowerCase().trim(),
+            password,
+            codigoAfiliado,
+            totalCompras: 0
+        });
+
+        await newUser.save();
+
+        await AffiliateCoupon.findOneAndUpdate(
+            { code: codigoAfiliado },
+            { discountPercentage: 5, createdByEmail: newUser.email, active: true },
+            { upsert: true, new: true }
+        );
+
+        res.json({ success: true, message: 'Cuenta creada exitosamente.', codigoAfiliado });
+    } catch (error) {
+        console.error("Error en registro:", error);
+        res.status(500).json({ success: false, message: 'Error interno al registrar usuario.' });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Faltan datos.' });
+        }
+
+        const user = await UserAuth.findOne({ email: email.toLowerCase().trim() });
+        if (!user || user.password !== password) {
+            return res.status(400).json({ success: false, message: 'Correo o contraseña incorrectos.' });
+        }
+
+        res.json({
+            success: true,
+            token: "token_jwt_mock_" + user._id,
+            user: {
+                nombre: user.nombre,
+                email: user.email,
+                codigoAfiliado: user.codigoAfiliado,
+                totalCompras: user.totalCompras
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error al iniciar sesión.' });
+    }
+});
+
+app.post('/api/auth/google', async (req, res) => {
+    try {
+        const { token } = req.body;
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(Buffer.from(base64, 'base64').toString());
+        
+        const { sub: googleId, email, name: nombre } = payload;
+        if (!email) return res.status(400).json({ success: false, message: 'Token de Google inválido.' });
+
+        let user = await UserAuth.findOne({ email: email.toLowerCase().trim() });
+
+        if (!user) {
+            const codigoAfiliado = "JXSEPH" + Math.floor(1000 + Math.random() * 9000);
+            user = new UserAuth({
+                nombre,
+                email: email.toLowerCase().trim(),
+                googleId,
+                codigoAfiliado,
+                totalCompras: 0
+            });
+            await user.save();
+
+            await AffiliateCoupon.findOneAndUpdate(
+                { code: codigoAfiliado },
+                { discountPercentage: 5, createdByEmail: user.email, active: true },
+                { upsert: true, new: true }
+            );
+        }
+
+        res.json({
+            success: true,
+            token: "token_google_" + user._id,
+            user: {
+                nombre: user.nombre,
+                email: user.email,
+                codigoAfiliado: user.codigoAfiliado,
+                totalCompras: user.totalCompras
+            }
+        });
+    } catch (error) {
+        console.error("Error Google Auth:", error);
+        res.status(500).json({ success: false, message: 'Error al autenticar con Google.' });
+    }
+});
+
+
+// --- RUTAS PARA CÓDIGOS DE DESCUENTO Y AFILIADOS ---
+
+app.post('/api/descuento/validar', async (req, res) => {
+    try {
+        const { codigo } = req.body;
+        if (!codigo) return res.status(400).json({ valido: false, mensaje: 'Falta el código.' });
+
+        const cupon = await AffiliateCoupon.findOne({ code: codigo.trim().toUpperCase(), active: true });
+        if (!cupon) {
+            return res.status(404).json({ valido: false, mensaje: 'Código de descuento no válido o expirado.' });
+        }
+
+        res.json({
+            valido: true,
+            descuento: cupon.discountPercentage,
+            mensaje: `¡Código aplicado con éxito! Tienes un ${cupon.discountPercentage}% de descuento.`
+        });
+    } catch (error) {
+        res.status(500).json({ valido: false, mensaje: 'Error al validar el código.' });
+    }
+});
+
+app.post('/api/afiliados/crear-cupon', async (req, res) => {
+    try {
+        const { emailUsuario, customCode, discountPercentage } = req.body;
+        if (!emailUsuario) return res.status(400).json({ success: false, error: 'Falta el correo del usuario.' });
+
+        const user = await UserAuth.findOne({ email: emailUsuario.toLowerCase().trim() });
+        if (!user) return res.status(404).json({ success: false, error: 'Usuario no encontrado.' });
+
+        const codeToUse = customCode ? customCode.trim().toUpperCase() : user.codigoAfiliado;
+        const porcentaje = discountPercentage || 5;
+
+        const cupon = await AffiliateCoupon.findOneAndUpdate(
+            { code: codeToUse },
+            { discountPercentage: porcentaje, createdByEmail: user.email, active: true },
+            { upsert: true, new: true }
+        );
+
+        res.json({ success: true, message: 'Cupón actualizado o creado con éxito.', cupon });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Error al procesar el cupón.' });
+    }
+});
+
+app.get('/api/afiliados/estadisticas', async (req, res) => {
+    try {
+        const { email, codigo } = req.query;
+        if (!email && !codigo) {
+            return res.status(400).json({ success: false, error: 'Falta el correo o el código de afiliado.' });
+        }
+
+        let cuponQuery = codigo ? { code: codigo.toUpperCase() } : { createdByEmail: email.toLowerCase() };
+        const cupon = await AffiliateCoupon.findOne(cuponQuery);
+
+        if (!cupon) {
+            return res.status(404).json({ success: false, error: 'No se encontró un código de afiliado activo.' });
+        }
+
+        const usosTotales = await Order.countDocuments({ identifier: cupon.code });
+        const comisionPorUso = 0.50; 
+        const comisionTotal = (usosTotales * comisionPorUso).toFixed(2);
+
+        res.json({
+            success: true,
+            codigo: cupon.code,
+            descuentoPorcentaje: cupon.discountPercentage,
+            usosTotales: usosTotales,
+            comisionAcumulada: `$${comisionTotal}`
+        });
+
+    } catch (error) {
+        console.error("Error al obtener estadísticas:", error);
+        res.status(500).json({ success: false, error: 'Error interno al calcular estadísticas.' });
+    }
+});
+
+
+// --- RUTAS DE DESBLOQUEO Y CONTROL DE IPS ---
+
+app.delete('/api/admin/desbloquear-ip', async (req, res) => {
+    try {
+        const { ip } = req.body;
+        if (!ip) return res.status(400).json({ success: false, error: 'Falta la dirección IP.' });
+
+        const resultado = await BlockedIp.findOneAndDelete({ ip: ip.trim() });
+        if (!resultado) {
+            return res.status(404).json({ success: false, error: 'La IP no se encuentra en la lista de bloqueados.' });
+        }
+
+        res.json({ success: true, message: `IP ${ip} desbloqueada correctamente.` });
+    } catch (error) {
+        console.error("Error al desbloquear IP:", error);
+        res.status(500).json({ success: false, error: 'Error interno al desbloquear la IP.' });
+    }
+});
+
+app.get('/api/admin/ips-bloqueadas', async (req, res) => {
+    try {
+        const ips = await BlockedIp.find().sort({ createdAt: -1 });
+        res.json({ success: true, ips });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Error al obtener las IPs bloqueadas.' });
+    }
+});
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
