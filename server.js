@@ -96,7 +96,7 @@ const verificationLogSchema = new mongoose.Schema({
 });
 const VerificationLog = mongoose.model('VerificationLog', verificationLogSchema);
 
-// --- MIDDLEWARE PARA BLOQUEAR IPS BANEADAS (REDIRECCIÓN A /suspendido/) ---
+// --- MIDDLEWARE PARA BLOQUEAR IPS BANEADAS (OPTIMIZADO PARA APIs Y WEB) ---
 app.use(async (req, res, next) => {
     let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (clientIp && clientIp.includes(',')) {
@@ -107,10 +107,16 @@ app.use(async (req, res, next) => {
         if (isBlocked) {
             const razon = encodeURIComponent(isBlocked.reason || 'Violación de políticas de seguridad');
             
-            if (req.headers.accept && req.headers.accept.includes('application/json')) {
-                return res.status(403).json({ success: false, error: 'IP bloqueada', reason: isBlocked.reason });
+            // Si la petición viene hacia la API (panel admin o solicitudes AJAX), retorna JSON en lugar de redirigir
+            if (req.originalUrl.startsWith('/api') || req.path.startsWith('/api')) {
+                return res.status(403).json({ 
+                    success: false, 
+                    error: 'Tu dirección IP ha sido bloqueada.', 
+                    reason: isBlocked.reason 
+                });
             }
             
+            // Si entran directamente desde el navegador a la tienda, redirige a la carpeta /suspendido/
             return res.redirect(`https://www.jxsephstore.shop/suspendido/?reason=${razon}`);
         }
     } catch (e) {}
@@ -360,7 +366,6 @@ app.post('/api/pedidos', async (req, res) => {
 
         await newOrder.save();
 
-        // Si el cliente está registrado con su correo, incrementamos su contador de compras totales (+1)
         if (identifier) {
             await UserAuth.findOneAndUpdate(
                 { email: identifier.toLowerCase().trim() },
@@ -426,7 +431,6 @@ app.delete('/api/admin/pedidos/:id', async (req, res) => {
 // --- INICIO DE NUEVAS APIS (PROGRAMA, SESIONES Y DESBLOQUEO) ---
 // =========================================================
 
-// --- NUEVOS MODELOS PARA USUARIOS Y CUPONES DE AFILIADOS ---
 const userAuthSchema = new mongoose.Schema({
     nombre: { type: String, required: true },
     email: { type: String, unique: true, required: true },
