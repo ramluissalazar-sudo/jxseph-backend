@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 
 const app = express();
 
-// 1. RESTRINGIR PETICIONES (Agregado tu panel en Netlify, tu tienda y localhost)
+// 1. RESTRINGIR PETICIONES (Panel Netlify, tienda y localhost)
 const whitelist = [
     'https://jxsephpaneladmin.netlify.app',
     'https://jxsephstore.shop',
@@ -64,7 +64,7 @@ const redeemCodeSchema = new mongoose.Schema({
 });
 const RedeemCode = mongoose.model('RedeemCode', redeemCodeSchema);
 
-// Nuevo Esquema para Controlar el Cooldown de Canjes por UID (1 hora)
+// Controlar Cooldown de Canjes por UID (1 hora)
 const redeemCooldownSchema = new mongoose.Schema({
     uid: { type: String, unique: true, required: true },
     lastRedeemTime: { type: Date, required: true }
@@ -96,6 +96,18 @@ const verificationLogSchema = new mongoose.Schema({
 });
 const VerificationLog = mongoose.model('VerificationLog', verificationLogSchema);
 
+// Modelo de Usuarios (Autenticación)
+const userAuthSchema = new mongoose.Schema({
+    nombre: { type: String, required: true },
+    email: { type: String, unique: true, required: true },
+    password: { type: String },
+    telefono: { type: String },
+    googleId: { type: String },
+    totalCompras: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now }
+});
+const UserAuth = mongoose.model('UserAuth', userAuthSchema);
+
 // --- MIDDLEWARE PARA BLOQUEAR IPS BANEADAS ---
 app.use(async (req, res, next) => {
     let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -105,7 +117,6 @@ app.use(async (req, res, next) => {
     try {
         const isBlocked = await BlockedIp.findOne({ ip: clientIp });
         if (isBlocked) {
-            // Si la petición viene de la API o del panel, respondemos JSON para evitar fallos de CORS/fetch
             if (req.originalUrl.startsWith('/api') || req.path.startsWith('/api')) {
                 return res.status(403).json({ success: false, error: 'Tu dirección IP ha sido bloqueada.', reason: isBlocked.reason });
             }
@@ -205,7 +216,7 @@ app.post('/api/admin/bloquear-ip', async (req, res) => {
     }
 });
 
-// --- NUEVAS RUTAS DE DESBLOQUEO Y CONSULTA DE IPS BANEADAS ---
+// --- RUTAS DE GESTIÓN Y DESBLOQUEO DE IPS ---
 
 app.get('/api/admin/ips-bloqueadas', async (req, res) => {
     try {
@@ -230,6 +241,122 @@ app.delete('/api/admin/desbloquear-ip', async (req, res) => {
     } catch (error) {
         console.error("Error al desbloquear IP:", error);
         res.status(500).json({ success: false, error: 'Error interno al desbloquear la IP.' });
+    }
+});
+
+// --- RUTAS DE AUTENTICACIÓN Y USUARIO ---
+
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { nombre, telefono, email, password } = req.body;
+        if (!email || !password || !nombre) {
+            return res.status(400).json({ success: false, message: 'Faltan datos obligatorios.' });
+        }
+
+        const existingUser = await UserAuth.findOne({ email: email.toLowerCase().trim() });
+        if (existingUser) {
+            return res.status(400).json({ success: false, message: 'Este correo ya está registrado.' });
+        }
+
+        const newUser = new UserAuth({
+            nombre,
+            telefono,
+            email: email.toLowerCase().trim(),
+            password,
+            totalCompras: 0
+        });
+
+        await newUser.save();
+
+        res.json({ success: true, message: '¡Cuenta creada exitosamente!' });
+    } catch (error) {
+        console.error("Error en registro:", error);
+        res.status(500).json({ success: false, message: 'Error interno al registrar usuario.' });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Faltan datos.' });
+        }
+
+        const user = await UserAuth.findOne({ email: email.toLowerCase().trim() });
+        if (!user || user.password !== password) {
+            return res.status(400).json({ success: false, message: 'Correo o contraseña incorrectos.' });
+        }
+
+        res.json({
+            success: true,
+            token: "token_jwt_mock_" + user._id,
+            user: {
+                nombre: user.nombre,
+                email: user.email,
+                totalCompras: user.totalCompras
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error al iniciar sesión.' });
+    }
+});
+
+app.post('/api/auth/google', async (req, res) => {
+    try {
+        const { token } = req.body;
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(Buffer.from(base64, 'base64').toString());
+        
+        const { sub: googleId, email, name: nombre } = payload;
+        if (!email) return res.status(400).json({ success: false, message: 'Token de Google inválido.' });
+
+        let user = await UserAuth.findOne({ email: email.toLowerCase().trim() });
+
+        if (!user) {
+            user = new UserAuth({
+                nombre,
+                email: email.toLowerCase().trim(),
+                googleId,
+                totalCompras: 0
+            });
+            await user.save();
+        }
+
+        res.json({
+            success: true,
+            token: "token_google_" + user._id,
+            user: {
+                nombre: user.nombre,
+                email: user.email,
+                totalCompras: user.totalCompras
+            }
+        });
+    } catch (error) {
+        console.error("Error Google Auth:", error);
+        res.status(500).json({ success: false, message: 'Error al autenticar con Google.' });
+    }
+});
+
+// Ruta para obtener datos actualizados del usuario en tiempo real
+app.get('/api/auth/usuario', async (req, res) => {
+    try {
+        const { email } = req.query;
+        if (!email) return res.status(400).json({ success: false, error: 'Falta el correo.' });
+
+        const user = await UserAuth.findOne({ email: email.toLowerCase().trim() });
+        if (!user) return res.status(404).json({ success: false, error: 'Usuario no encontrado.' });
+
+        res.json({
+            success: true,
+            user: {
+                nombre: user.nombre,
+                email: user.email,
+                totalCompras: user.totalCompras || 0
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Error al obtener datos del usuario.' });
     }
 });
 
@@ -262,7 +389,6 @@ app.post('/api/redeem/canjear', async (req, res) => {
 
         const isFreeFire = tempDoc.game === 'Free Fire';
 
-        // VALIDACIÓN DE COOLDOWN DE 1 HORA PARA FREE FIRE
         if (isFreeFire && uid) {
             const cooldownRegistro = await RedeemCooldown.findOne({ uid: uid });
             if (cooldownRegistro) {
@@ -280,7 +406,6 @@ app.post('/api/redeem/canjear', async (req, res) => {
         }
 
         const assignedUid = isFreeFire ? (uid || 'N/A') : 'Giftcard Entregada';
-        
         let datoRoblox = email && phone ? `Email: ${email} | Tel: ${phone}` : (email || phone || contacto);
         const assignedName = isFreeFire ? (playerName || 'N/A') : (datoRoblox ? String(datoRoblox).trim() : 'Sin contacto');
 
@@ -291,7 +416,6 @@ app.post('/api/redeem/canjear', async (req, res) => {
         );
         if (!codeDoc) return res.status(400).json({ success: false, message: 'Este código acaba de ser canjeado por otro usuario.' });
 
-        // GUARDAR/ACTUALIZAR EL TIEMPO DE COOLDOWN SI ES FREE FIRE
         if (isFreeFire && uid) {
             await RedeemCooldown.findOneAndUpdate(
                 { uid: uid },
@@ -340,7 +464,6 @@ app.get('/api/admin/redeem/todos', async (req, res) => {
     }
 });
 
-// RUTA CORREGIDA: Permite eliminar tanto por ID interno de Mongo como por el código de texto exacto
 app.delete('/api/admin/redeem/:id', async (req, res) => {
     try {
         let parametro = req.params.id;
@@ -355,7 +478,7 @@ app.delete('/api/admin/redeem/:id', async (req, res) => {
         }
 
         if (!resultado) {
-            return res.status(404).json({ success: false, error: 'Código não encontrado en la base de datos.' });
+            return res.status(404).json({ success: false, error: 'Código no encontrado en la base de datos.' });
         }
 
         res.json({ success: true, message: 'Código eliminado correctamente.' });
@@ -364,7 +487,7 @@ app.delete('/api/admin/redeem/:id', async (req, res) => {
     }
 });
 
-// --- RUTAS DE PEDIDOS ---
+// --- RUTAS DE PEDIDOS Y PANEL ADMIN ---
 
 app.post('/api/pedidos', async (req, res) => {
     try {
@@ -386,6 +509,7 @@ app.post('/api/pedidos', async (req, res) => {
         });
 
         await newOrder.save();
+
         res.json({ success: true, orderId, message: 'Pedido creado exitosamente.' });
     } catch (error) {
         console.error("Error al guardar pedido:", error);
@@ -417,15 +541,40 @@ app.get('/api/admin/pedidos', async (req, res) => {
     }
 });
 
+// ACTUALIZACIÓN DE PEDIDO CON INCREMENTO AUTOMÁTICO DE COMPRAS AL COMPLETAR
 app.put('/api/admin/pedidos/:id', async (req, res) => {
     try {
         const { status } = req.body; 
         if (!['Completado', 'Cancelado', 'Pendiente'].includes(status)) {
             return res.status(400).json({ error: 'Estado no válido.' });
         }
-        const updatedOrder = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true });
+
+        const pedidoAnterior = await Order.findById(req.params.id);
+        if (!pedidoAnterior) {
+            return res.status(404).json({ error: 'Pedido no encontrado.' });
+        }
+
+        const updatedOrder = await Order.findByIdAndUpdate(
+            req.params.id, 
+            { status }, 
+            { new: true }
+        );
+
+        // Si cambia a 'Completado' por primera vez, sumamos +1 al totalCompras del usuario
+        if (status === 'Completado' && pedidoAnterior.status !== 'Completado') {
+            const identificadorUsuario = updatedOrder.identifier;
+            
+            if (identificadorUsuario) {
+                await UserAuth.findOneAndUpdate(
+                    { email: identificadorUsuario.toLowerCase().trim() },
+                    { $inc: { totalCompras: 1 } }
+                );
+            }
+        }
+
         res.json({ success: true, message: `Pedido actualizado`, updatedOrder });
     } catch (error) {
+        console.error("Error al actualizar pedido:", error);
         res.status(500).json({ error: 'Error al actualizar pedido.' });
     }
 });
