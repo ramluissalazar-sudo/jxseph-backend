@@ -179,7 +179,12 @@ async function procesarVerificacionUid(uid, clientIp) {
 app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
     const clientIp = req.clientIp;
-    if (!uid) return res.status(400).json({ valid: false, error: "Falta el UID" });
+
+    // FILTRO DE SEGURIDAD: Bloquea pings de Render para que no se guarden en el historial
+    if (!uid || uid === 'test_check' || uid === 'ping' || uid === 'health') {
+        return res.json({ valid: false, error: "Healthcheck OK" });
+    }
+
     const resultado = await procesarVerificacionUid(uid, clientIp);
     res.json(resultado);
 });
@@ -187,7 +192,11 @@ app.get('/verificar', async (req, res) => {
 app.post('/api/verificar-id', async (req, res) => {
     const { uid } = req.body;
     const clientIp = req.clientIp;
-    if (!uid) return res.status(400).json({ success: false, error: "Falta el UID" });
+
+    if (!uid || uid === 'test_check' || uid === 'ping' || uid === 'health') {
+        return res.json({ success: false, error: "Healthcheck OK" });
+    }
+
     const resultado = await procesarVerificacionUid(uid, clientIp);
     res.json({ success: resultado.valid, playerName: resultado.AccountName || null, error: resultado.error });
 });
@@ -198,6 +207,28 @@ app.get('/api/admin/verificaciones', async (req, res) => {
         res.json({ success: true, logs });
     } catch (error) {
         res.status(500).json({ error: 'Error al obtener registros de verificación.' });
+    }
+});
+
+// NUEVA RUTA: Permite eliminar logs de verificación (todos o por lista de IDs seleccionados)
+app.delete('/api/admin/verificaciones', async (req, res) => {
+    try {
+        const { ids, clearAll } = req.body;
+
+        if (clearAll) {
+            await VerificationLog.deleteMany({});
+            return res.json({ success: true, message: 'Se eliminaron todos los registros de verificación visuales.' });
+        }
+
+        if (Array.isArray(ids) && ids.length > 0) {
+            await VerificationLog.deleteMany({ _id: { $in: ids } });
+            return res.json({ success: true, message: 'Registros seleccionados eliminados correctamente.' });
+        }
+
+        return res.status(400).json({ success: false, error: 'Proporcione una lista de IDs o la opción clearAll.' });
+    } catch (error) {
+        console.error("Error al eliminar registros de verificación:", error);
+        res.status(500).json({ success: false, error: 'Error al eliminar registros de verificación.' });
     }
 });
 
