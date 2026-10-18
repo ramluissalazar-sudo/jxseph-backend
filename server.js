@@ -180,7 +180,7 @@ app.get('/verificar', async (req, res) => {
     const uid = req.query.uid;
     const clientIp = req.clientIp;
 
-    // FILTRO DE SEGURIDAD: Bloquea pings de Render para que no se guarden en el historial
+    // FILTRO: Ignorar pings automáticos de Render (Health Check)
     if (!uid || uid === 'test_check' || uid === 'ping' || uid === 'health') {
         return res.json({ valid: false, error: "Healthcheck OK" });
     }
@@ -210,14 +210,14 @@ app.get('/api/admin/verificaciones', async (req, res) => {
     }
 });
 
-// NUEVA RUTA: Permite eliminar logs de verificación (todos o por lista de IDs seleccionados)
+// NUEVA RUTA: Eliminar registros de verificación visuales (individuales, seleccionados o todos)
 app.delete('/api/admin/verificaciones', async (req, res) => {
     try {
         const { ids, clearAll } = req.body;
 
         if (clearAll) {
             await VerificationLog.deleteMany({});
-            return res.json({ success: true, message: 'Se eliminaron todos los registros de verificación visuales.' });
+            return res.json({ success: true, message: 'Todos los registros de verificación fueron eliminados.' });
         }
 
         if (Array.isArray(ids) && ids.length > 0) {
@@ -225,7 +225,7 @@ app.delete('/api/admin/verificaciones', async (req, res) => {
             return res.json({ success: true, message: 'Registros seleccionados eliminados correctamente.' });
         }
 
-        return res.status(400).json({ success: false, error: 'Proporcione una lista de IDs o la opción clearAll.' });
+        return res.status(400).json({ success: false, error: 'Parámetros no válidos.' });
     } catch (error) {
         console.error("Error al eliminar registros de verificación:", error);
         res.status(500).json({ success: false, error: 'Error al eliminar registros de verificación.' });
